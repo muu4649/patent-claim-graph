@@ -210,7 +210,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     padding: 8px 14px; border-bottom: 1px solid #F8FAFC;
     border-right: 1px solid #F8FAFC; text-align: center; vertical-align: middle;
 }
-.ct td.elem-cell { text-align: left; color: #1E293B; font-weight: 500; }
+.ct td.elem-cell { text-align: left; color: #1E293B; font-weight: 500; white-space: normal; word-break: break-word; min-width: 260px; max-width: 480px; line-height: 1.5; }
 .ct tbody tr:hover td { background: #F8FAFC; }
 .ct tr:last-child td { border-bottom: none; }
 .c-direct  { color: #059669; font-weight: 700; font-size: 16px; }
@@ -481,11 +481,39 @@ def bezier_curve(x0, y0, x1, y1, n=28):
     return list(bx) + [None], list(by) + [None]
 
 
+def _elem_keyword(elem: str) -> str:
+    """要素テキストから主要キーワードを抽出（最大12文字）"""
+    e = re.sub(r'^前記|^その|^当該|^上記', '', elem.strip())
+    e = re.split(r'[をがはにでのと、]', e)[0].strip()
+    return e[:12] if e else ''
+
+
 def plot_mindmap(claims: dict) -> go.Figure:
     pos = compute_tree_pos(claims)
     if not pos: return go.Figure()
 
-    # ── エッジ（ベジェ曲線）────────────────────────
+    # ── 親子集合（スキップ判定用）──────────────────
+    parent_set = {n: set(c['parents']) for n, c in claims.items()}
+
+    # ── 要素類似度エッジ（非従属ペア）─────────────
+    claim_texts = {n: ' '.join(c['elements']) for n, c in claims.items()}
+    claim_nums = sorted(claims.keys())
+    sim_pairs = []
+    for i in range(len(claim_nums)):
+        for j in range(i + 1, len(claim_nums)):
+            n1, n2 = claim_nums[i], claim_nums[j]
+            if n2 in parent_set[n1] or n1 in parent_set[n2]: continue
+            if n1 not in pos or n2 not in pos: continue
+            bg1 = _bigrams(claim_texts[n1])
+            bg2 = _bigrams(claim_texts[n2])
+            union = bg1 | bg2
+            sim = len(bg1 & bg2) / len(union) if union else 0
+            if sim >= 0.15:
+                sim_pairs.append((n1, n2, sim))
+    sim_pairs.sort(key=lambda x: -x[2])
+    sim_pairs = sim_pairs[:10]  # 上位10ペアのみ表示
+
+    # ── 従属エッジ（ベジェ曲線）──────────────────
     edge_x, edge_y = [], []
     for n, c in claims.items():
         if n not in pos: continue
@@ -513,20 +541,46 @@ def plot_mindmap(claims: dict) -> go.Figure:
             f"<extra></extra>"
         )
         if c['is_independent']:
-            nclr.append('#2563EB'); nsz.append(46)
+            nclr.append('#2563EB'); nsz.append(48)
         elif c['is_multi_dep']:
-            nclr.append('#7C3AED'); nsz.append(36)
+            nclr.append('#7C3AED'); nsz.append(38)
         else:
-            nclr.append('#475569'); nsz.append(36)
+            nclr.append('#475569'); nsz.append(38)
 
     fig = go.Figure()
 
-    # エッジ
+    # 要素類似エッジ（破線・アンバー）
+    for n1, n2, sim in sim_pairs:
+        x0, y0 = pos[n1]; x1, y1 = pos[n2]
+        alpha = min(0.25 + sim * 1.2, 0.80)
+        fig.add_trace(go.Scatter(
+            x=[x0, x1, None], y=[y0, y1, None],
+            mode='lines',
+            line=dict(width=1.8, color=f'rgba(245,158,11,{alpha:.2f})', dash='dot'),
+            hoverinfo='text',
+            hovertext=f'C{n1} ↔ C{n2} 要素類似度: {sim:.0%}',
+            showlegend=False, name='',
+        ))
+
+    # 従属エッジ（ベジェ・グレー）
     fig.add_trace(go.Scatter(
         x=edge_x, y=edge_y, mode='lines',
-        line=dict(width=2.0, color='#CBD5E1'),
-        hoverinfo='none',
+        line=dict(width=2.2, color='#94A3B8'),
+        hoverinfo='none', showlegend=False,
     ))
+
+    # レジェンド用ダミートレース
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode='lines',
+        line=dict(color='#94A3B8', width=2),
+        name='従属関係', showlegend=True,
+    ))
+    if sim_pairs:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode='lines',
+            line=dict(color='#F59E0B', width=2, dash='dot'),
+            name='要素類似', showlegend=True,
+        ))
 
     # ノード
     fig.add_trace(go.Scatter(
@@ -535,19 +589,21 @@ def plot_mindmap(claims: dict) -> go.Figure:
         text=ntxt,
         textposition='middle center',
         textfont=dict(color='white', size=14, family='SF Mono, Menlo, Arial Black'),
-        hovertemplate=nhov, name='',
+        hovertemplate=nhov, name='', showlegend=False,
     ))
 
-    # ノード下ラベル
+    # ノード下ラベル（種別 + 最初の要素キーワード）
     annotations = []
     for n in sorted(claims.keys()):
         if n not in pos: continue
         c = claims[n]
         x, y = pos[n]
-        kind = '独' if c['is_independent'] else ('多' if c['is_multi_dep'] else '従')
+        kind = '独立' if c['is_independent'] else ('多重' if c['is_multi_dep'] else '従属')
+        kw = _elem_keyword(c['elements'][0]) if c['elements'] else ''
+        kw_str = f' · {kw}' if kw else ''
         annotations.append(dict(
-            x=x, y=y - 0.65,
-            text=f"<span style='font-size:9px;color:#64748B'>{kind} · {len(c['elements'])}要素</span>",
+            x=x, y=y - 0.72,
+            text=f"<span style='font-size:9px;color:#64748B'>{kind}{kw_str}</span>",
             showarrow=False,
             font=dict(size=9, color='#64748B'),
         ))
@@ -557,14 +613,21 @@ def plot_mindmap(claims: dict) -> go.Figure:
     py = max((max(all_y) - min(all_y)) * 0.15, 0.8)
 
     fig.update_layout(
-        annotations=annotations, showlegend=False,
+        annotations=annotations,
+        showlegend=True,
+        legend=dict(
+            x=0.01, y=0.01, xanchor='left', yanchor='bottom',
+            bgcolor='rgba(241,245,249,0.9)',
+            bordercolor='#E2E8F0', borderwidth=1,
+            font=dict(size=11, color='#475569'),
+        ),
         margin=dict(l=20, r=20, t=20, b=20),
         paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
                    range=[min(all_x)-px, max(all_x)+px]),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
                    range=[min(all_y)-py, max(all_y)+py]),
-        height=480,
+        height=500,
         hoverlabel=dict(bgcolor='#0F172A', font_color='#F1F5F9',
                         font_size=12, bordercolor='#1E293B'),
     )
@@ -628,32 +691,33 @@ def _bigrams(s: str) -> set:
 def build_comparison(patents: dict) -> pd.DataFrame:
     """
     patents: {name: {claims, resolved}}
-    独立項の構成要件を横断比較
-    bigram Jaccard ≥ 0.33 で同一要素とみなす
+    全請求項（独立項 + 従属項の追加要素）を横断比較
+    bigram Jaccard ≥ 0.25 で同一要素とみなす
+    groups: [[full_elem, claim_label, {pname: elem}], ...]
     """
     pnames = list(patents.keys())
-    groups = []  # [(display_text, {pname: original})]
+    groups = []  # [full_elem_for_matching, claim_label, {pname: elem}]
 
     for pname, data in patents.items():
         for num, c in data['claims'].items():
-            if not c['is_independent']: continue
+            claim_lbl = f"C{num}({'独' if c['is_independent'] else '従'})"
             for elem in c['elements']:
                 bg = _bigrams(elem)
                 matched = False
                 for g in groups:
-                    canon_bg = _bigrams(g[0])
+                    canon_bg = _bigrams(g[0])  # g[0] = full text for matching
                     union = bg | canon_bg
-                    if union and len(bg & canon_bg)/len(union) >= 0.33:
-                        g[1][pname] = elem
+                    if union and len(bg & canon_bg)/len(union) >= 0.25:
+                        if pname not in g[2]:
+                            g[2][pname] = elem
                         matched = True; break
                 if not matched:
-                    disp = elem[:40]+'…' if len(elem)>40 else elem
-                    groups.append((disp, {pname: elem}))
+                    groups.append([elem, claim_lbl, {pname: elem}])
 
     shorts = {p: (p[:22]+'…' if len(p)>22 else p) for p in pnames}
     rows = []
-    for disp, presence in groups:
-        row = {'構成要件': disp}
+    for full_elem, claim_lbl, presence in groups:
+        row = {'構成要件': full_elem}
         n_present = 0
         for p in pnames:
             row[shorts[p]] = '✓' if p in presence else '—'
@@ -729,8 +793,7 @@ def render_claim_chart(claims: dict, resolved: dict) -> str:
     rows.append('</tr></thead><tbody>')
 
     for elem in all_elems:
-        short = elem[:42]+'…' if len(elem)>42 else elem
-        rows.append(f'<tr><td class="elem-cell" title="{elem}">{short}</td>')
+        rows.append(f'<tr><td class="elem-cell">{elem}</td>')
         for n in nums:
             c = claims[n]; res = resolved.get(n, [])
             if elem in c['elements']:
@@ -991,8 +1054,11 @@ def main():
         st.markdown('<div class="panel-title">クレーム関係構造 — マインドマップ</div>', unsafe_allow_html=True)
         st.markdown(
             '<div class="panel-sub">'
-            '🔵 独立項 &nbsp;·&nbsp; 🟣 多重従属 &nbsp;·&nbsp; ⬤ 従属項 &nbsp;／&nbsp; '
-            'エッジ = 従属関係（下が子）&nbsp;·&nbsp; ホバーでクレームテキスト表示'
+            '🔵 独立項 &nbsp;·&nbsp; 🟣 多重従属 &nbsp;·&nbsp; ⬤ 従属項'
+            '&nbsp;｜&nbsp;'
+            '<b style="color:#94A3B8">───</b> 従属関係 &nbsp;·&nbsp; '
+            '<b style="color:#F59E0B">- - -</b> 要素類似（bigram Jaccard ≥ 15%）'
+            '&nbsp;·&nbsp; ホバーで詳細表示'
             '</div>',
             unsafe_allow_html=True,
         )
