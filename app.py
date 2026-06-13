@@ -615,11 +615,14 @@ def main():
                 st.error("pdfplumber が未インストールです。`pip install pdfplumber` を実行してください。")
             else:
                 files = st.file_uploader(
-                    "PDF を選択（複数可）",
+                    "PDF を選択（最大8件・各200MBまで）",
                     type=["pdf"],
                     accept_multiple_files=True,
                     label_visibility="collapsed",
                 )
+                if files and len(files) > 8:
+                    st.warning("8件を超えています。先頭8件のみ処理します。")
+                    files = files[:8]
                 if files:
                     pdf_texts = process_pdfs(files)
                     # 複数PDFの場合はセレクタ表示
