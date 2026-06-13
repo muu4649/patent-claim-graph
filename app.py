@@ -1,14 +1,22 @@
 """
 特許クレーム構造分析 — 非生成AI版
 構文解析 + グラフ理論のみで動作
+PDF複数アップロード / テキスト入力 対応
 """
 
 import re
+import io
 import streamlit as st
 import networkx as nx
 import plotly.graph_objects as go
 import pandas as pd
 from collections import defaultdict
+
+try:
+    import pdfplumber
+    PDF_OK = True
+except ImportError:
+    PDF_OK = False
 
 # ───────────────────────────────────────────────────────────────
 # Page Config
@@ -28,187 +36,76 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ── Base ──────────────────────────────── */
-[data-testid="stAppViewContainer"] {
-    background: #F0F2F6;
-}
-[data-testid="stSidebar"] {
-    background: #FFFFFF;
-    border-right: 1px solid #E5E7EB;
-}
+[data-testid="stAppViewContainer"] { background: #F0F2F6; }
+[data-testid="stSidebar"] { background: #FFFFFF; border-right: 1px solid #E5E7EB; }
 #MainMenu, footer, header { visibility: hidden; }
 
-/* ── Typography ─────────────────────────── */
-.app-title {
-    font-size: 18px;
-    font-weight: 700;
-    color: #0F172A;
-    letter-spacing: -0.4px;
-    margin: 0;
-}
-.app-sub {
-    font-size: 11px;
-    color: #94A3B8;
-    margin: 2px 0 20px;
-    letter-spacing: 0.3px;
-}
+/* ── App header ─────────────────────────── */
+.app-title { font-size: 18px; font-weight: 700; color: #0F172A; letter-spacing: -0.4px; margin: 0; }
+.app-sub   { font-size: 11px; color: #94A3B8; margin: 2px 0 20px; letter-spacing: 0.3px; }
 
 /* ── Metric cards ───────────────────────── */
-.cards-row { display: flex; gap: 12px; margin-bottom: 16px; }
 .card {
-    flex: 1;
-    background: #FFFFFF;
-    border: 1px solid #E5E7EB;
-    border-radius: 12px;
-    padding: 16px 18px;
+    background: #FFFFFF; border: 1px solid #E5E7EB;
+    border-radius: 12px; padding: 16px 18px;
 }
-.card-label {
-    font-size: 10px;
-    font-weight: 600;
-    color: #9CA3AF;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    margin-bottom: 4px;
-}
-.card-value {
-    font-size: 26px;
-    font-weight: 700;
-    color: #0F172A;
-    line-height: 1.1;
-}
-.card-sub {
-    font-size: 11px;
-    color: #6B7280;
-    margin-top: 3px;
-}
+.card-label { font-size: 10px; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+.card-value { font-size: 26px; font-weight: 700; color: #0F172A; line-height: 1.1; }
+.card-sub   { font-size: 11px; color: #6B7280; margin-top: 3px; }
 
-/* ── Claim chart table ──────────────────── */
-.ct-wrap {
-    background: #FFFFFF;
-    border: 1px solid #E5E7EB;
-    border-radius: 12px;
-    padding: 20px;
-    overflow-x: auto;
-}
-.ct {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-}
+/* ── Claim chart ────────────────────────── */
+.ct-wrap { background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 20px; overflow-x: auto; }
+.ct { width: 100%; border-collapse: collapse; font-size: 12px; }
 .ct th {
-    background: #F8FAFC;
-    color: #475569;
-    font-weight: 600;
-    padding: 9px 14px;
-    text-align: center;
-    border-bottom: 2px solid #E2E8F0;
-    border-right: 1px solid #E2E8F0;
-    white-space: nowrap;
-    min-width: 80px;
+    background: #F8FAFC; color: #475569; font-weight: 600;
+    padding: 9px 14px; text-align: center;
+    border-bottom: 2px solid #E2E8F0; border-right: 1px solid #E2E8F0;
+    white-space: nowrap; min-width: 80px;
 }
-.ct th.elem-col {
-    text-align: left;
-    min-width: 200px;
-    max-width: 280px;
-}
+.ct th.elem-col { text-align: left; min-width: 220px; max-width: 300px; }
 .ct td {
-    padding: 8px 14px;
-    border-bottom: 1px solid #F1F5F9;
-    border-right: 1px solid #F1F5F9;
-    color: #334155;
-    text-align: center;
-    vertical-align: middle;
+    padding: 8px 14px; border-bottom: 1px solid #F1F5F9; border-right: 1px solid #F1F5F9;
+    color: #334155; text-align: center; vertical-align: middle;
 }
-.ct td.elem-cell {
-    text-align: left;
-    color: #1E293B;
-    font-weight: 500;
-    max-width: 280px;
-}
+.ct td.elem-cell { text-align: left; color: #1E293B; font-weight: 500; max-width: 300px; }
 .ct tr:last-child td { border-bottom: none; }
 
-/* Cell states */
-.c-direct   { color: #059669; font-weight: 700; font-size: 15px; }
-.c-added    { color: #2563EB; font-weight: 700; font-size: 13px; }
-.c-inherit  { color: #94A3B8; font-size: 14px; }
-.c-none     { color: #E2E8F0; font-size: 14px; }
+.c-direct  { color: #059669; font-weight: 700; font-size: 15px; }
+.c-added   { color: #2563EB; font-weight: 700; font-size: 13px; }
+.c-inherit { color: #94A3B8; font-size: 14px; }
+.c-none    { color: #E2E8F0; font-size: 14px; }
 
-/* Badges */
-.badge {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: 5px;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    margin-top: 4px;
-}
+.badge { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 9px; font-weight: 700; letter-spacing: 0.3px; margin-top: 4px; }
 .b-ind   { background: #DBEAFE; color: #1D4ED8; }
 .b-dep   { background: #F1F5F9; color: #475569; }
 .b-multi { background: #EDE9FE; color: #5B21B6; }
 
-/* ── Legend ─────────────────────────────── */
-.legend {
-    display: flex;
-    gap: 18px;
-    font-size: 11px;
-    color: #6B7280;
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid #F1F5F9;
-}
-.legend span b { margin-right: 3px; }
+.legend { display: flex; gap: 18px; font-size: 11px; color: #6B7280; margin-top: 12px; padding-top: 12px; border-top: 1px solid #F1F5F9; }
 
 /* ── Graph panel ────────────────────────── */
-.graph-wrap {
-    background: #FFFFFF;
-    border: 1px solid #E5E7EB;
-    border-radius: 12px;
-    padding: 16px 18px;
+.graph-wrap { background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 16px 18px; }
+.panel-title { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 2px; }
+.panel-sub   { font-size: 10px; color: #9CA3AF; margin-bottom: 10px; }
+
+/* ── Patent selector pills ──────────────── */
+.patent-tag {
+    display: inline-block; background: #EFF6FF; color: #1D4ED8;
+    border: 1px solid #BFDBFE; border-radius: 6px;
+    padding: 3px 10px; font-size: 11px; font-weight: 600; margin: 2px;
 }
-.panel-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: #374151;
-    margin-bottom: 2px;
-}
-.panel-sub {
-    font-size: 10px;
-    color: #9CA3AF;
-    margin-bottom: 10px;
-}
+.patent-tag.active { background: #2563EB; color: white; border-color: #2563EB; }
 
 /* ── Tabs ───────────────────────────────── */
-[data-testid="stTabs"] [role="tablist"] {
-    gap: 4px;
-    border-bottom: 1px solid #E5E7EB;
-}
-[data-testid="stTabs"] button {
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    color: #6B7280 !important;
-    border-radius: 6px 6px 0 0 !important;
-    padding: 8px 18px !important;
-}
-[data-testid="stTabs"] button[aria-selected="true"] {
-    color: #2563EB !important;
-    border-bottom: 2px solid #2563EB !important;
-    font-weight: 600 !important;
-}
+[data-testid="stTabs"] [role="tablist"] { gap: 4px; border-bottom: 1px solid #E5E7EB; }
+[data-testid="stTabs"] button { font-size: 13px !important; font-weight: 500 !important; color: #6B7280 !important; border-radius: 6px 6px 0 0 !important; padding: 8px 18px !important; }
+[data-testid="stTabs"] button[aria-selected="true"] { color: #2563EB !important; border-bottom: 2px solid #2563EB !important; font-weight: 600 !important; }
 
-/* ── Sidebar ────────────────────────────── */
-.sidebar-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: #374151;
-    letter-spacing: 0.3px;
-    margin-bottom: 6px;
-}
-[data-testid="stTextArea"] textarea {
-    font-size: 12px !important;
-    font-family: 'Menlo', 'Consolas', monospace !important;
-    line-height: 1.6 !important;
-    border-radius: 8px !important;
-}
+/* ── Sidebar ─────────────────────────────  */
+.sidebar-label { font-size: 11px; font-weight: 600; color: #374151; letter-spacing: 0.3px; margin-bottom: 6px; }
+[data-testid="stTextArea"] textarea { font-size: 12px !important; font-family: 'Menlo','Consolas',monospace !important; line-height: 1.6 !important; border-radius: 8px !important; }
+
+/* ── Info box ───────────────────────────── */
+.info-box { background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #0369A1; margin-bottom: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -238,6 +135,60 @@ DEP_RE = re.compile(
     r'\s*[、に]?(?:記載の|おける|係る|に係る)'
 )
 
+CLAIMS_SECTION_RE = re.compile(
+    r'(?:【書類名】\s*特許請求の範囲|特\s*許\s*請\s*求\s*の\s*範\s*囲)'
+    r'(.*?)(?=【書類名】|【発明の詳細な説明】|明\s*細\s*書|\Z)',
+    re.DOTALL,
+)
+
+
+# ───────────────────────────────────────────────────────────────
+# PDF テキスト抽出
+# ───────────────────────────────────────────────────────────────
+
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """pdfplumber で PDF 全文テキストを抽出"""
+    if not PDF_OK:
+        return ""
+    text_parts = []
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            t = page.extract_text()
+            if t:
+                text_parts.append(t)
+    return "\n".join(text_parts)
+
+
+def extract_claims_section(raw_text: str) -> str:
+    """全文テキストから請求項セクションを抽出"""
+    # 1. 【書類名】特許請求の範囲 セクション
+    m = CLAIMS_SECTION_RE.search(raw_text)
+    if m:
+        return m.group(1).strip()
+
+    # 2. 【請求項N】が存在すればそのまま返す
+    if re.search(r'【請求項\d+】', raw_text):
+        # 【請求項1】より前のメタ情報を除去
+        idx = re.search(r'【請求項1】', raw_text)
+        if idx:
+            return raw_text[idx.start():].strip()
+        return raw_text.strip()
+
+    return ""
+
+
+def process_pdfs(uploaded_files) -> dict:
+    """
+    アップロードされた複数PDFを処理。
+    返り値: {filename: claim_text}
+    """
+    results = {}
+    for f in uploaded_files:
+        raw = extract_text_from_pdf(f.read())
+        claims_text = extract_claims_section(raw)
+        results[f.name] = claims_text if claims_text else raw
+    return results
+
 
 # ───────────────────────────────────────────────────────────────
 # パーサー
@@ -255,7 +206,6 @@ def parse_claims(text: str) -> dict:
         parents = []
         m = DEP_RE.search(body)
         if m:
-            # 「請求項1または2」「請求項1または請求項2」の両形式に対応
             parents = [int(x) for x in re.findall(r'\d+', m.group(0))]
 
         is_ind = len(parents) == 0
@@ -277,7 +227,6 @@ def _extract_elements(body: str, is_independent: bool) -> list:
     if not is_independent:
         body = DEP_RE.sub('', body).strip()
 
-    # ターミネータの出現位置を収集
     positions = []
     for term in TERMINATORS:
         for m in re.finditer(re.escape(term), body):
@@ -344,7 +293,7 @@ def build_dep_graph(claims: dict) -> nx.DiGraph:
     for n, c in claims.items():
         for p in c['parents']:
             if p in claims:
-                G.add_edge(n, p)  # 子 → 親
+                G.add_edge(n, p)
     return G
 
 
@@ -358,10 +307,8 @@ def build_elem_graph(claims: dict, resolved: dict):
             if lbl not in label_to_id:
                 eid = f"E{len(label_to_id)}"
                 label_to_id[lbl] = eid
-                G.add_node(eid, label=lbl, full=elem, claims=set(), own_claim=num)
-            else:
-                eid = label_to_id[lbl]
-            G.nodes[eid]['claims'].add(num)
+                G.add_node(eid, label=lbl, full=elem, claims=set())
+            G.nodes[label_to_id[lbl]]['claims'].add(num)
 
     for num, elems in resolved.items():
         for elem in elems:
@@ -386,7 +333,7 @@ def build_elem_graph(claims: dict, resolved: dict):
 
 
 # ───────────────────────────────────────────────────────────────
-# グラフメトリクス
+# メトリクス
 # ───────────────────────────────────────────────────────────────
 
 def compute_metrics(G: nx.DiGraph, claims: dict) -> dict:
@@ -453,27 +400,15 @@ def _layered_pos(G: nx.DiGraph, claims: dict) -> dict:
 def plot_dep_graph(G: nx.DiGraph, claims: dict) -> go.Figure:
     pos = _layered_pos(G, claims)
 
-    # エッジ
-    ex, ey = [], []
-    for u, v in G.edges():
-        if u in pos and v in pos:
-            x0, y0 = pos[u]
-            x1, y1 = pos[v]
-            ex += [x0, x1, None]
-            ey += [y0, y1, None]
-
-    # 矢印（アノテーション）
     annotations = []
     for u, v in G.edges():
         if u in pos and v in pos:
-            x0, y0 = pos[u]
-            x1, y1 = pos[v]
+            x0, y0 = pos[u]; x1, y1 = pos[v]
             annotations.append(dict(
                 x=x1, y=y1, ax=x0, ay=y0,
                 xref='x', yref='y', axref='x', ayref='y',
-                showarrow=True,
-                arrowhead=2, arrowsize=1.2, arrowwidth=1.5,
-                arrowcolor='#CBD5E1',
+                showarrow=True, arrowhead=2, arrowsize=1.2,
+                arrowwidth=1.5, arrowcolor='#CBD5E1',
             ))
 
     nx_, ny_, ntxt, nclr, nsz, nhov = [], [], [], [], [], []
@@ -485,13 +420,11 @@ def plot_dep_graph(G: nx.DiGraph, claims: dict) -> go.Figure:
         nx_.append(x); ny_.append(y)
         ntxt.append(str(num))
 
-        dep = f"独立項" if c['is_independent'] else f"→ 請求項{'・'.join(str(p) for p in c['parents'])}"
+        dep = "独立項" if c['is_independent'] else f"→ C{'・'.join(str(p) for p in c['parents'])}"
         nhov.append(
             f"<b>請求項{num}</b><br>{dep}<br>"
-            f"要素数: {len(c['elements'])}<br>"
-            f"種別: {c['type']}<extra></extra>"
+            f"要素数: {len(c['elements'])}<br>種別: {c['type']}<extra></extra>"
         )
-
         if c['is_independent']:
             nclr.append('#2563EB'); nsz.append(36)
         elif c['is_multi_dep']:
@@ -500,33 +433,23 @@ def plot_dep_graph(G: nx.DiGraph, claims: dict) -> go.Figure:
             nclr.append('#64748B'); nsz.append(28)
 
     fig = go.Figure()
+    fig.add_trace(go.Scatter(x=[], y=[], mode='lines', hoverinfo='none'))
     fig.add_trace(go.Scatter(
-        x=ex, y=ey, mode='lines',
-        line=dict(width=0),
-        hoverinfo='none',
-    ))
-    fig.add_trace(go.Scatter(
-        x=nx_, y=ny_,
-        mode='markers+text',
-        marker=dict(size=nsz, color=nclr,
-                    line=dict(width=2.5, color='white'),
-                    symbol='circle'),
+        x=nx_, y=ny_, mode='markers+text',
+        marker=dict(size=nsz, color=nclr, line=dict(width=2.5, color='white')),
         text=ntxt,
         textposition='middle center',
         textfont=dict(color='white', size=13, family='Arial Black, Arial'),
-        hovertemplate=nhov,
-        name='',
+        hovertemplate=nhov, name='',
     ))
     fig.update_layout(
-        annotations=annotations,
-        showlegend=False,
+        annotations=annotations, showlegend=False,
         margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor='#FFFFFF',
-        plot_bgcolor='#FFFFFF',
+        paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.05, 1.05]),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[0.3, 1.15]),
         height=300,
-        hoverlabel=dict(bgcolor='#1E293B', font_color='white', font_size=12, bordercolor='#1E293B'),
+        hoverlabel=dict(bgcolor='#1E293B', font_color='white', font_size=12),
     )
     return fig
 
@@ -544,12 +467,9 @@ def plot_elem_graph(elem_G: nx.Graph, claims: dict) -> go.Figure:
     max_c = max(centrality.values()) if centrality else 1
 
     ex, ey = [], []
-    ew = []
-    for u, v, d in elem_G.edges(data=True):
+    for u, v in elem_G.edges():
         x0, y0 = pos[u]; x1, y1 = pos[v]
-        ex += [x0, x1, None]
-        ey += [y0, y1, None]
-        ew.append(d.get('weight', 1))
+        ex += [x0, x1, None]; ey += [y0, y1, None]
 
     nx_, ny_, ntxt, nclr, nsz, nhov = [], [], [], [], [], []
     n_claims = max(len(claims), 1)
@@ -557,58 +477,37 @@ def plot_elem_graph(elem_G: nx.Graph, claims: dict) -> go.Figure:
     for node in elem_G.nodes():
         x, y = pos[node]
         nx_.append(x); ny_.append(y)
-
         lbl = elem_G.nodes[node].get('label', node)
         claim_set = elem_G.nodes[node].get('claims', set())
         c_val = centrality.get(node, 0)
         coverage = len(claim_set) / n_claims
-
         disp = lbl[:14] + '…' if len(lbl) > 14 else lbl
         ntxt.append(disp)
-
-        size = 10 + int(c_val / max_c * 22)
-        nsz.append(size)
-
-        if coverage >= 0.6:
-            nclr.append('#2563EB')
-        elif coverage >= 0.3:
-            nclr.append('#059669')
-        else:
-            nclr.append('#94A3B8')
-
-        claims_str = ' · '.join(f"C{c}" for c in sorted(claim_set))
+        nsz.append(10 + int(c_val / max_c * 22))
+        nclr.append('#2563EB' if coverage >= 0.6 else ('#059669' if coverage >= 0.3 else '#94A3B8'))
         nhov.append(
             f"<b>{lbl}</b><br>"
-            f"出現: {claims_str}<br>"
+            f"出現: {' · '.join(f'C{c}' for c in sorted(claim_set))}<br>"
             f"次数中心性: {c_val:.2f}<extra></extra>"
         )
 
     fig = go.Figure()
+    fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines', line=dict(width=1.0, color='#E2E8F0'), hoverinfo='none'))
     fig.add_trace(go.Scatter(
-        x=ex, y=ey, mode='lines',
-        line=dict(width=1.0, color='#E2E8F0'),
-        hoverinfo='none',
-    ))
-    fig.add_trace(go.Scatter(
-        x=nx_, y=ny_,
-        mode='markers+text',
-        marker=dict(size=nsz, color=nclr, opacity=0.9,
-                    line=dict(width=2, color='white')),
+        x=nx_, y=ny_, mode='markers+text',
+        marker=dict(size=nsz, color=nclr, opacity=0.9, line=dict(width=2, color='white')),
         text=ntxt,
         textposition='top center',
         textfont=dict(size=9, color='#374151'),
-        hovertemplate=nhov,
-        name='',
+        hovertemplate=nhov, name='',
     ))
     fig.update_layout(
-        showlegend=False,
-        margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor='#FFFFFF',
-        plot_bgcolor='#FFFFFF',
+        showlegend=False, margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         height=340,
-        hoverlabel=dict(bgcolor='#1E293B', font_color='white', font_size=12, bordercolor='#1E293B'),
+        hoverlabel=dict(bgcolor='#1E293B', font_color='white', font_size=12),
     )
     return fig
 
@@ -622,8 +521,6 @@ def render_claim_chart(claims: dict, resolved: dict) -> str:
         return ""
 
     nums = sorted(claims.keys())
-
-    # 全構成要件リスト（独立項→従属項の順）
     all_elems = []
     seen = set()
     for n in nums:
@@ -636,51 +533,41 @@ def render_claim_chart(claims: dict, resolved: dict) -> str:
         return "<p style='color:#9CA3AF;font-size:13px'>構成要件を抽出できませんでした。</p>"
 
     rows = ['<div class="ct-wrap"><table class="ct">']
-
-    # ヘッダー
     rows.append('<thead><tr><th class="elem-col">構成要件</th>')
     for n in nums:
         c = claims[n]
         if c['is_independent']:
-            badge = f'<span class="badge b-ind">独立項</span>'
+            badge = '<span class="badge b-ind">独立項</span>'
         elif c['is_multi_dep']:
-            badge = f'<span class="badge b-multi">多重従属</span>'
+            badge = '<span class="badge b-multi">多重従属</span>'
         else:
             badge = f'<span class="badge b-dep">→ C{c["parents"][0]}</span>'
         rows.append(f'<th>C{n}<br>{badge}</th>')
-    rows.append('</tr></thead>')
+    rows.append('</tr></thead><tbody>')
 
-    # ボディ
-    rows.append('<tbody>')
-    for idx, elem in enumerate(all_elems):
-        short = elem[:38] + '…' if len(elem) > 38 else elem
+    for elem in all_elems:
+        short = elem[:40] + '…' if len(elem) > 40 else elem
         rows.append(f'<tr><td class="elem-cell" title="{elem}">{short}</td>')
-
         for n in nums:
             c = claims[n]
             res = resolved.get(n, [])
             if elem in c['elements']:
-                if c['is_independent']:
-                    rows.append('<td><span class="c-direct">✓</span></td>')
-                else:
-                    rows.append('<td><span class="c-added">＋</span></td>')
+                cls = 'c-direct' if c['is_independent'] else 'c-added'
+                sym = '✓' if c['is_independent'] else '＋'
+                rows.append(f'<td><span class="{cls}">{sym}</span></td>')
             elif elem in res:
                 rows.append('<td><span class="c-inherit">↗</span></td>')
             else:
                 rows.append('<td><span class="c-none">—</span></td>')
-
         rows.append('</tr>')
 
     rows.append('</tbody></table>')
-    rows.append('''
-    <div class="legend">
+    rows.append('''<div class="legend">
         <span><b style="color:#059669">✓</b> 直接記載（独立項）</span>
         <span><b style="color:#2563EB">＋</b> 追加（従属項）</span>
         <span><b style="color:#94A3B8">↗</b> 親から継承</span>
         <span><b style="color:#E2E8F0">—</b> 非該当</span>
-    </div>
-    ''')
-    rows.append('</div>')
+    </div></div>''')
     return ''.join(rows)
 
 
@@ -717,48 +604,95 @@ SAMPLE = """\
 def main():
     # ── Sidebar ──────────────────────────────────────────────
     with st.sidebar:
-        st.markdown('<div class="sidebar-label">請求項テキスト</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-label">入力方法</div>', unsafe_allow_html=True)
+        mode = st.radio("", ["PDF アップロード", "テキスト入力"], label_visibility="collapsed")
 
-        if st.button("サンプルを読み込む", use_container_width=True):
-            st.session_state['input'] = SAMPLE
+        claim_text = ""
+        patent_label = "入力データ"
 
-        text = st.text_area(
-            "claims",
-            value=st.session_state.get('input', ''),
-            height=440,
-            placeholder="【請求項1】\n...\n\n【請求項2】\n...",
-            label_visibility="collapsed",
-            key='input',
-        )
+        if mode == "PDF アップロード":
+            if not PDF_OK:
+                st.error("pdfplumber が未インストールです。`pip install pdfplumber` を実行してください。")
+            else:
+                files = st.file_uploader(
+                    "PDF を選択（複数可）",
+                    type=["pdf"],
+                    accept_multiple_files=True,
+                    label_visibility="collapsed",
+                )
+                if files:
+                    pdf_texts = process_pdfs(files)
+                    # 複数PDFの場合はセレクタ表示
+                    if len(pdf_texts) == 1:
+                        fname = list(pdf_texts.keys())[0]
+                        claim_text = pdf_texts[fname]
+                        patent_label = fname
+                        st.markdown(
+                            f'<div class="info-box">📄 {fname}<br>【請求項N】 '
+                            f'{len(re.findall(r"【請求項\d+】", claim_text))} 件を検出</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        names = list(pdf_texts.keys())
+                        selected = st.selectbox(
+                            "分析する特許を選択",
+                            names,
+                            format_func=lambda x: x[:40],
+                        )
+                        claim_text = pdf_texts[selected]
+                        patent_label = selected
+                        st.markdown(
+                            f'<div class="info-box">'
+                            f'📂 {len(files)} 件アップロード済み<br>'
+                            f'現在: {selected[:35]}<br>'
+                            f'【請求項N】 {len(re.findall(r"【請求項\d+】", claim_text))} 件を検出'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
 
-        run = st.button("解 析", type="primary", use_container_width=True)
+                    with st.expander("抽出テキストを確認"):
+                        st.text_area("", claim_text, height=200, label_visibility="collapsed")
+
+        else:  # テキスト入力
+            if st.button("サンプルを読み込む", use_container_width=True):
+                st.session_state['input'] = SAMPLE
+
+            claim_text = st.text_area(
+                "claims",
+                value=st.session_state.get('input', ''),
+                height=400,
+                placeholder="【請求項1】\n...\n\n【請求項2】\n...",
+                label_visibility="collapsed",
+                key='input',
+            )
+
+        run = st.button("解　析", type="primary", use_container_width=True)
 
     # ── Header ───────────────────────────────────────────────
     st.markdown('<div class="app-title">⚖ 特許クレーム構造分析</div>', unsafe_allow_html=True)
     st.markdown('<div class="app-sub">非生成AI ・ 構文解析 + グラフ理論</div>', unsafe_allow_html=True)
 
     # ── 解析 ─────────────────────────────────────────────────
-    if run and text.strip():
-        claims = parse_claims(text)
+    if run and claim_text.strip():
+        claims = parse_claims(claim_text)
         resolved = resolve_inherited(claims)
         st.session_state['claims'] = claims
         st.session_state['resolved'] = resolved
+        st.session_state['patent_label'] = patent_label
 
     claims = st.session_state.get('claims', {})
     resolved = st.session_state.get('resolved', {})
+    label = st.session_state.get('patent_label', '')
 
     if not claims:
         st.markdown("""
-        <div style="
-            text-align:center; padding:100px 0;
-            color:#CBD5E1; user-select:none;
-        ">
-            <div style="font-size:44px; margin-bottom:14px;">📄</div>
-            <div style="font-size:14px; font-weight:500;">
-                左のパネルに請求項を貼り付けて「解析」を押してください
+        <div style="text-align:center;padding:100px 0;color:#CBD5E1;user-select:none;">
+            <div style="font-size:44px;margin-bottom:14px;">📄</div>
+            <div style="font-size:14px;font-weight:500;">
+                左パネルから PDF をアップロード、またはテキストを貼り付けて「解析」を押してください
             </div>
-            <div style="font-size:12px; margin-top:6px;">
-                【請求項1】〜【請求項N】の形式に対応
+            <div style="font-size:12px;margin-top:6px;">
+                J-PlatPat の PDF、または【請求項1】〜【請求項N】形式のテキストに対応
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -769,10 +703,14 @@ def main():
     elem_G = build_elem_graph(claims, resolved)
     m = compute_metrics(dep_G, claims)
 
-    # ── メトリクスカード ──────────────────────────────────────
-    st.markdown('<div class="cards-row">', unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
+    if label:
+        st.markdown(
+            f'<div style="font-size:12px;color:#6B7280;margin-bottom:10px;">📄 {label}</div>',
+            unsafe_allow_html=True,
+        )
 
+    # ── メトリクスカード ──────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f"""<div class="card">
             <div class="card-label">請求項数</div>
@@ -797,14 +735,14 @@ def main():
             <div class="card-value">{m['n_elements']}</div>
             <div class="card-sub">要素ノード {len(elem_G.nodes())} 個</div>
         </div>""", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # ── タブ ─────────────────────────────────────────────────
     tab1, tab2 = st.tabs(["　クレームチャート　", "　グラフ構造　"])
 
     with tab1:
-        chart_html = render_claim_chart(claims, resolved)
-        st.markdown(chart_html, unsafe_allow_html=True)
+        st.markdown(render_claim_chart(claims, resolved), unsafe_allow_html=True)
 
     with tab2:
         left, right = st.columns(2, gap="medium")
@@ -812,36 +750,21 @@ def main():
         with left:
             st.markdown('<div class="graph-wrap">', unsafe_allow_html=True)
             st.markdown('<div class="panel-title">クレーム依存グラフ</div>', unsafe_allow_html=True)
-            st.markdown(
-                '<div class="panel-sub">🔵 独立項 ・ 🟣 多重従属 ・ ⬤ 従属項 ／ 矢印 = 子→親</div>',
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(
-                plot_dep_graph(dep_G, claims),
-                use_container_width=True,
-                config={'displayModeBar': False},
-            )
+            st.markdown('<div class="panel-sub">🔵 独立項 ・ 🟣 多重従属 ・ ⬤ 従属項 ／ 矢印 = 子→親</div>', unsafe_allow_html=True)
+            st.plotly_chart(plot_dep_graph(dep_G, claims), use_container_width=True, config={'displayModeBar': False})
             st.markdown('</div>', unsafe_allow_html=True)
 
         with right:
             st.markdown('<div class="graph-wrap">', unsafe_allow_html=True)
             st.markdown('<div class="panel-title">構成要件ネットワーク</div>', unsafe_allow_html=True)
-            st.markdown(
-                '<div class="panel-sub">ノードサイズ = 次数中心性 ／ 🔵 高被参照 ・ 🟢 中 ・ ⬤ 低</div>',
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(
-                plot_elem_graph(elem_G, claims),
-                use_container_width=True,
-                config={'displayModeBar': False},
-            )
+            st.markdown('<div class="panel-sub">ノードサイズ = 次数中心性 ／ 🔵 高被参照 ・ 🟢 中 ・ ⬤ 低</div>', unsafe_allow_html=True)
+            st.plotly_chart(plot_elem_graph(elem_G, claims), use_container_width=True, config={'displayModeBar': False})
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # 中心性テーブル
         st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+
         centrality = nx.degree_centrality(elem_G)
         betweenness = nx.betweenness_centrality(elem_G)
-
         rows = []
         for node in elem_G.nodes():
             lbl = elem_G.nodes[node].get('label', node)
@@ -852,7 +775,6 @@ def main():
                 '次数中心性': round(centrality.get(node, 0), 3),
                 '媒介中心性': round(betweenness.get(node, 0), 3),
             })
-
         df = pd.DataFrame(rows).sort_values('次数中心性', ascending=False)
         st.dataframe(df, use_container_width=True, hide_index=True, height=200)
 

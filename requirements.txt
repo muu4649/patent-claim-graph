@@ -2,3 +2,4 @@ streamlit>=1.23.0
 networkx>=2.6
 plotly>=5.13
 pandas>=1.1
+pdfplumber>=0.10.0
