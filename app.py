@@ -1134,6 +1134,158 @@ def add_patent(name: str, claim_text: str):
 
 
 # ─────────────────────────────────────────────────────────────
+# 手法説明ポップオーバー
+# ─────────────────────────────────────────────────────────────
+_HELP = {
+    'breadth': (
+        "**広狭スコア算出方法**",
+        """
+USPTO Patent Claims Methodology に基づく 3指標の加重合計（0〜100点）。
+
+| 指標 | 計算式 | 配点 |
+|---|---|---|
+| 語数スコア | max(0, 1 − 文字数 ÷ 600) × 40 | 40点満点 |
+| 限定語密度 | max(0, 1 − 限定語数 ÷ 8) × 35 | 35点満点 |
+| 要素数スコア | max(0, 1 − 要素数 ÷ 8) × 25 | 25点満点 |
+
+**判定ライン:** 広 ≥ 62点 ／ 中 ≥ 35点 ／ 狭 < 35点
+
+**限定語の例:** 「所定の」「特定の」「N以上」「N〜M」「ただし」「のみ」など
+
+**根拠:** 語数が多いほど権利範囲が狭くなる傾向は *Patent claims and patent scope* (ScienceDirect, 2019) で実証されています。
+""",
+    ),
+    'dag': (
+        "**クレーム依存グラフ（inter-claim DAG）算出方法**",
+        """
+**依存関係の検出**
+
+```
+正規表現:
+請求項\\s*(\\d+)
+(?:\\s*(?:または|若しくは|又は)\\s*(?:請求項\\s*)?(\\d+))*
+\\s*[、に]?(?:記載の|おける|係る)
+```
+
+「請求項N（またはM）に記載の」のパターンを全請求項から抽出し、NetworkX の有向グラフ（DAG）として構築します。
+
+**読み方**
+- 独立項 = DAGのルート（親を持たない）→ 権利の軸
+- 従属深さ = サポートの厚み → 深いほど段階的な権利主張が可能
+- 多重従属 = 複数の親クレームを参照 → 対象製品のバリエーションに対応
+
+**レイアウト:** Reingold-Tilford 風ツリー（根を上に配置）
+""",
+    ),
+    'inner': (
+        "**inner-claim 要素間依存グラフ算出方法**",
+        """
+**参考文献:** FLAN-Graph (ACL 2024, arXiv:2404.14372)
+単純なグラフ手法がLLMを上回ることを実証した手法の内部依存部分を実装。
+
+**検出ロジック**
+
+```python
+# 前記X パターンを正規表現で抽出
+re.findall(
+    r'前記([ひらがな・漢字・英数字]{2,20})[をがはにでのと、。]',
+    要素テキスト
+)
+```
+
+要素Ejに「前記X」が現れ、X が先行要素Eiの本文に含まれる場合、Ei → Ej のエッジを追加します。
+
+**読み方**
+- エッジなし = 構成要件が独立している（シンプルな構成）
+- A → B → C の連鎖 = 発明の構造的コア
+- 多く参照される要素 = 発明のキーコンポーネント（侵害判断で重要）
+""",
+    ),
+    'jaccard': (
+        "**bigram Jaccard 類似度算出方法**",
+        """
+**手順**
+
+1. テキストから指示語・前置詞（「前記」「その」「当該」「上記」）と空白を除去
+2. 2文字N-gram（bigram）集合を生成
+3. Jaccard 係数を計算
+
+```
+Jaccard(A, B) = |A ∩ B| / |A ∪ B|
+```
+
+**例:**
+"プロセッサを備え" → {プロ, ロセ, セッ, ッサ, サを, を備, 備え}
+
+**閾値**
+- 対比表での同一要素判定: ≥ 0.25
+- DAGの類似エッジ表示: ≥ 0.15
+
+**特徴:** 表記ゆれ・語尾変化を吸収しながら同一技術要素をスクリーニングする決定論的手法。LLMを使わず、同一入力→同一出力で再現可能。
+""",
+    ),
+    'sbert': (
+        "**SBERT コサイン類似度算出方法**",
+        """
+**モデル:** `intfloat/multilingual-e5-small`（多言語対応・384次元）
+
+**手順**
+
+1. 入力テキストに `"passage: "` プレフィックスを付与（E5モデルの仕様）
+2. エンコーダでベクトル化（L2正規化済み）
+3. ドット積 = コサイン類似度
+
+```
+sim(e1, e2) =
+  encode("passage: " + e1) · encode("passage: " + e2)
+```
+
+**閾値:** ≥ 0.75 で同一要素とみなす
+
+**bigram Jaccard との違い**
+| | bigram Jaccard | SBERT |
+|---|---|---|
+| 方式 | 表層文字列 | 意味ベクトル |
+| 速度 | 高速 | 要モデルロード |
+| 強み | 決定論的・再現可能 | 言い換え・同義語に対応 |
+
+両者を組み合わせるとカバレッジが向上します。
+""",
+    ),
+    'network': (
+        "**構成要件ネットワーク中心性指標の算出方法**",
+        """
+**グラフ構造**
+同一請求項に共起する構成要件間にエッジを張ります（エッジ重み = 共起クレーム数）。
+
+**次数中心性（Degree Centrality）**
+```
+DC(v) = そのノードのエッジ数 / (総ノード数 − 1)
+```
+→ 値が高い = 多くのクレームに登場する **発明コア要素**
+→ 侵害分析・無効化調査でまず注目すべき要素
+
+**媒介中心性（Betweenness Centrality）**
+```
+BC(v) = Σ (vを通る最短経路数 / 全ペアの最短経路数)
+```
+→ 値が高い = 技術領域を橋渡しする **ハブ要素**
+→ この要素を持つ請求項が技術的に広い範囲をカバー
+
+**活用:** 中心性の高い要素が競合特許と重複している場合 → 権利範囲の重複リスク
+""",
+    ),
+}
+
+
+def _info_popover(key: str):
+    title, body = _HELP[key]
+    with st.popover(f"ℹ 算出方法", use_container_width=False):
+        st.markdown(f"### {title}")
+        st.markdown(body)
+
+
+# ─────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────
 def main():
@@ -1323,13 +1475,28 @@ def main():
     tab_comp = tab_objects[3] if n_patents >= 2 else None
 
     with tab_chart:
+        _tc0, _ic0 = st.columns([9, 1])
+        with _tc0:
+            st.markdown(
+                '<div style="font-size:12px;color:#64748B;margin-bottom:6px">'
+                '各請求項の構成要件と広狭スコアを一覧表示します。'
+                '独立項 = 権利の外縁、従属項 = サポートの厚みを確認できます。'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        with _ic0:
+            _info_popover('breadth')
         st.markdown(render_claim_chart(claims, resolved), unsafe_allow_html=True)
 
     with tab_map:
         dag_col, mat_col = st.columns([1.4, 1], gap="medium")
         with dag_col:
             st.markdown('<div class="panel">', unsafe_allow_html=True)
-            st.markdown('<div class="panel-title">クレーム依存グラフ（DAG）</div>', unsafe_allow_html=True)
+            _td1, _id1 = st.columns([8, 2])
+            with _td1:
+                st.markdown('<div class="panel-title">クレーム依存グラフ（DAG）</div>', unsafe_allow_html=True)
+            with _id1:
+                _info_popover('dag')
             st.markdown(
                 '<div class="panel-sub">'
                 '<b style="color:#2563EB">●</b> 独立項 &nbsp;·&nbsp; '
@@ -1345,7 +1512,11 @@ def main():
             st.markdown('</div>', unsafe_allow_html=True)
         with mat_col:
             st.markdown('<div class="panel">', unsafe_allow_html=True)
-            st.markdown('<div class="panel-title">要素類似度マトリクス</div>', unsafe_allow_html=True)
+            _td2, _id2 = st.columns([7, 3])
+            with _td2:
+                st.markdown('<div class="panel-title">要素類似度マトリクス</div>', unsafe_allow_html=True)
+            with _id2:
+                _info_popover('jaccard')
             st.markdown(
                 '<div class="panel-sub">'
                 'bigram Jaccard 類似度（0〜100%）&nbsp;·&nbsp; '
@@ -1370,8 +1541,12 @@ def main():
         )[:n_inner_cols * 2]
         if inner_claims:
             st.markdown('<div class="panel" style="margin-top:12px">', unsafe_allow_html=True)
-            st.markdown('<div class="panel-title">inner-claim 要素間依存グラフ（FLAN-Graph手法）</div>',
-                        unsafe_allow_html=True)
+            _td3, _id3 = st.columns([8, 2])
+            with _td3:
+                st.markdown('<div class="panel-title">inner-claim 要素間依存グラフ（FLAN-Graph手法）</div>',
+                            unsafe_allow_html=True)
+            with _id3:
+                _info_popover('inner')
             st.markdown(
                 '<div class="panel-sub">'
                 '<b style="color:#2563EB">●</b> 先行要素 &nbsp;·&nbsp; '
@@ -1400,7 +1575,11 @@ def main():
         left, right = st.columns([1.1, 1], gap="medium")
         with left:
             st.markdown('<div class="panel">', unsafe_allow_html=True)
-            st.markdown('<div class="panel-title">構成要件ネットワーク</div>', unsafe_allow_html=True)
+            _td4, _id4 = st.columns([7, 3])
+            with _td4:
+                st.markdown('<div class="panel-title">構成要件ネットワーク</div>', unsafe_allow_html=True)
+            with _id4:
+                _info_popover('network')
             st.markdown('<div class="panel-sub">ノードサイズ = 次数中心性 ／ 🔵 高カバー ・ 🟢 中 ・ ⬤ 低</div>', unsafe_allow_html=True)
             st.plotly_chart(
                 plot_elem_network(elem_G, claims),
@@ -1430,6 +1609,9 @@ def main():
 
     if tab_comp is not None:
         with tab_comp:
+            _tc5, _ic5 = st.columns([7, 3])
+            with _ic5:
+                _info_popover('jaccard' if not SBERT_OK else 'sbert')
             use_sbert = False
             if SBERT_OK:
                 use_sbert = st.toggle(
