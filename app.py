@@ -34,198 +34,251 @@ st.markdown("""
 <style>
 /* ── Reset / base ─────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
-[data-testid="stAppViewContainer"] { background: #F1F5F9; }
+[data-testid="stAppViewContainer"] { background: #EEF2FF; }
+[data-testid="block-container"] { padding-top: 16px !important; }
 #MainMenu, footer, header { visibility: hidden; }
 
 /* ── Dark sidebar ─────────────────────────────── */
 section[data-testid="stSidebar"] > div:first-child {
-    background: #0A0F1C;
+    background: linear-gradient(180deg, #07101F 0%, #0A1628 100%);
     padding: 0;
+    border-right: 1px solid rgba(37,99,235,0.18);
 }
-section[data-testid="stSidebar"] .block-container {
-    padding: 0 !important;
-}
-/* Sidebar all text default */
+section[data-testid="stSidebar"] .block-container { padding: 0 !important; }
 section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
 section[data-testid="stSidebar"] div { color: #94A3B8; }
-/* Sidebar headings */
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 { color: #F1F5F9 !important; }
-/* Streamlit text_area and uploader inside sidebar */
 section[data-testid="stSidebar"] textarea {
-    background: #131B2E !important;
+    background: #0C1526 !important;
     color: #E2E8F0 !important;
-    border: 1px solid #1E293B !important;
+    border: 1px solid rgba(37,99,235,0.22) !important;
     font-size: 11px !important;
     font-family: 'Menlo','Consolas',monospace !important;
+    border-radius: 8px !important;
 }
 section[data-testid="stSidebar"] [data-testid="stFileUploader"] {
-    background: #131B2E;
-    border: 1px dashed #334155;
-    border-radius: 8px;
-    padding: 4px;
+    background: linear-gradient(135deg,#0C1526,#0F1C33);
+    border: 1px dashed rgba(37,99,235,0.32);
+    border-radius: 10px; padding: 8px;
 }
 section[data-testid="stSidebar"] [data-testid="stFileUploader"] span,
 section[data-testid="stSidebar"] [data-testid="stFileUploader"] p,
-section[data-testid="stSidebar"] [data-testid="stFileUploader"] small {
-    color: #64748B !important;
-}
-section[data-testid="stSidebar"] [data-baseweb="radio"] label {
-    color: #94A3B8 !important;
-}
-/* Sidebar primary button */
+section[data-testid="stSidebar"] [data-testid="stFileUploader"] small { color: #475569 !important; }
+section[data-testid="stSidebar"] [data-baseweb="radio"] label { color: #94A3B8 !important; }
 section[data-testid="stSidebar"] button[kind="primary"] {
-    background: #2563EB !important;
-    border: none !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border-radius: 6px !important;
+    background: linear-gradient(135deg,#2563EB,#3B82F6) !important;
+    border: none !important; color: white !important;
+    font-weight: 700 !important; border-radius: 8px !important;
+    box-shadow: 0 4px 14px rgba(37,99,235,0.35) !important;
+    letter-spacing: 0.2px !important;
 }
 section[data-testid="stSidebar"] button[kind="secondary"] {
     background: transparent !important;
-    border: 1px solid #1E293B !important;
-    color: #64748B !important;
-    border-radius: 6px !important;
+    border: 1px solid rgba(255,255,255,0.09) !important;
+    color: #64748B !important; border-radius: 8px !important;
 }
-/* Expander inside sidebar */
 section[data-testid="stSidebar"] [data-testid="stExpander"] {
-    background: #131B2E;
-    border: 1px solid #1E293B !important;
-    border-radius: 6px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: 8px;
 }
 
-/* ── Sidebar logo block ───────────────────────── */
+/* ── Sidebar logo ─────────────────────────────── */
 .sb-logo {
-    padding: 20px 20px 8px;
-    border-bottom: 1px solid #1E293B;
-    margin-bottom: 16px;
+    padding: 22px 20px 16px;
+    border-bottom: 1px solid rgba(37,99,235,0.18);
+    margin-bottom: 20px;
+    position: relative;
 }
+.sb-logo::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg,#2563EB,#06B6D4,#7C3AED);
+}
+.sb-logo-icon { font-size: 22px; margin-bottom: 8px; }
 .sb-logo-title {
-    font-size: 15px;
-    font-weight: 700;
-    color: #F1F5F9 !important;
-    letter-spacing: -0.3px;
+    font-size: 14px; font-weight: 800;
+    background: linear-gradient(135deg,#60A5FA,#38BDF8);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; letter-spacing: -0.3px;
 }
 .sb-logo-sub {
-    font-size: 10px;
-    color: #475569 !important;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    margin-top: 2px;
+    font-size: 10px; color: #334155 !important;
+    letter-spacing: 1px; text-transform: uppercase; margin-top: 4px;
 }
-.sb-section { padding: 0 16px 12px; }
+.sb-section { padding: 0 16px 16px; }
 .sb-label {
-    font-size: 10px;
-    font-weight: 600;
-    color: #475569 !important;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    margin-bottom: 8px;
+    font-size: 10px; font-weight: 700; color: #334155 !important;
+    text-transform: uppercase; letter-spacing: 0.9px; margin-bottom: 10px;
 }
 
 /* Patent list item */
 .pat-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 10px;
-    background: #131B2E;
-    border: 1px solid #1E293B;
-    border-radius: 6px;
-    margin-bottom: 5px;
-    cursor: pointer;
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; margin-bottom: 6px;
 }
 .pat-item-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #2563EB; flex-shrink: 0;
+    width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
 }
 .pat-item-name { font-size: 11px; color: #CBD5E1 !important; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pat-item-count { font-size: 10px; color: #475569 !important; }
+.pat-item-count {
+    font-size: 10px; color: #475569 !important;
+    background: rgba(255,255,255,0.06); padding: 2px 7px; border-radius: 4px;
+}
 
-/* ── App header ────────────────────────────────── */
-.app-header {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    margin-bottom: 4px;
+/* ── Hero header strip ─────────────────────────── */
+.hero-strip {
+    background: linear-gradient(135deg,#0C1A44 0%,#1246B0 55%,#0B2160 100%);
+    border-radius: 14px; padding: 26px 32px;
+    margin-bottom: 20px; position: relative; overflow: hidden;
+    box-shadow: 0 8px 40px rgba(37,99,235,0.28);
 }
-.app-title { font-size: 20px; font-weight: 700; color: #0F172A; letter-spacing: -0.5px; }
-.app-badge {
-    font-size: 10px; font-weight: 600;
-    background: #DBEAFE; color: #1D4ED8;
-    padding: 3px 8px; border-radius: 20px;
-    letter-spacing: 0.3px;
+.hero-strip::before {
+    content: '';
+    position: absolute; top: -70px; right: -50px;
+    width: 220px; height: 220px;
+    background: radial-gradient(circle,rgba(59,130,246,0.18),transparent 70%);
+    border-radius: 50%;
 }
-.app-sub { font-size: 11px; color: #94A3B8; margin-bottom: 20px; }
+.hero-strip::after {
+    content: '';
+    position: absolute; bottom: -50px; left: 25%;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle,rgba(6,182,212,0.12),transparent 70%);
+    border-radius: 50%;
+}
+.hero-title {
+    font-size: 24px; font-weight: 900; color: #FFFFFF;
+    letter-spacing: -0.8px; margin-bottom: 5px;
+    position: relative; z-index: 1;
+}
+.hero-title span {
+    background: linear-gradient(90deg,#60A5FA,#38BDF8);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.hero-sub { font-size: 12px; color: rgba(255,255,255,0.48); position: relative; z-index: 1; }
+.hero-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(59,130,246,0.22);
+    border: 1px solid rgba(59,130,246,0.45);
+    color: #93C5FD; font-size: 11px; font-weight: 700;
+    padding: 5px 14px; border-radius: 20px;
+    position: relative; z-index: 1; margin-top: 14px;
+    letter-spacing: 0.2px;
+}
+.hero-ghost {
+    position: absolute; right: 32px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 72px; font-weight: 900; color: rgba(255,255,255,0.05);
+    font-family: 'SF Mono','Menlo',monospace; line-height: 1; z-index: 0;
+    letter-spacing: -4px;
+}
 
 /* ── Metric cards ──────────────────────────────── */
 .metric-card {
     background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    padding: 16px 18px;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    border: 1px solid rgba(226,232,240,0.9);
+    border-radius: 12px; padding: 20px 22px;
+    position: relative; overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.mc-label { font-size: 10px; font-weight: 600; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
-.mc-value { font-size: 28px; font-weight: 700; color: #0F172A; line-height: 1; font-family: 'SF Mono','Menlo',monospace; }
-.mc-sub   { font-size: 11px; color: #64748B; margin-top: 4px; }
+.metric-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+}
+.mc-blue::before   { background: linear-gradient(90deg,#2563EB,#60A5FA); }
+.mc-cyan::before   { background: linear-gradient(90deg,#0891B2,#22D3EE); }
+.mc-green::before  { background: linear-gradient(90deg,#059669,#34D399); }
+.mc-purple::before { background: linear-gradient(90deg,#7C3AED,#A78BFA); }
+.mc-blue   { box-shadow: 0 4px 24px rgba(37,99,235,0.10); }
+.mc-cyan   { box-shadow: 0 4px 24px rgba(8,145,178,0.10); }
+.mc-green  { box-shadow: 0 4px 24px rgba(5,150,105,0.10); }
+.mc-purple { box-shadow: 0 4px 24px rgba(124,58,237,0.10); }
+.mc-label  { font-size: 10px; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.9px; margin-bottom: 8px; }
+.mc-value  { font-size: 38px; font-weight: 800; line-height: 1; font-family: 'SF Mono','Menlo',monospace; margin-bottom: 6px; }
+.mc-value.blue   { color: #2563EB; }
+.mc-value.cyan   { color: #0891B2; }
+.mc-value.green  { color: #059669; }
+.mc-value.purple { color: #7C3AED; }
+.mc-sub { font-size: 11px; color: #64748B; }
 
 /* ── Tabs ──────────────────────────────────────── */
-[data-testid="stTabs"] [role="tablist"] { border-bottom: 2px solid #E2E8F0; gap: 0; }
+[data-testid="stTabs"] [role="tablist"] {
+    border-bottom: 2px solid #E2E8F0;
+    gap: 0; background: #FFFFFF;
+    border-radius: 12px 12px 0 0;
+    padding: 0 8px;
+    box-shadow: 0 2px 10px rgba(15,23,42,0.05);
+}
 [data-testid="stTabs"] button {
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    color: #64748B !important;
-    padding: 10px 20px !important;
+    font-size: 13px !important; font-weight: 500 !important;
+    color: #64748B !important; padding: 13px 26px !important;
     border-radius: 0 !important;
     border-bottom: 2px solid transparent !important;
     margin-bottom: -2px !important;
 }
+[data-testid="stTabs"] button:hover { color: #2563EB !important; }
 [data-testid="stTabs"] button[aria-selected="true"] {
-    color: #2563EB !important;
-    border-bottom-color: #2563EB !important;
-    font-weight: 600 !important;
+    color: #2563EB !important; border-bottom-color: #2563EB !important;
+    font-weight: 700 !important;
+    background: rgba(37,99,235,0.05) !important;
 }
 
 /* ── Claim chart table ─────────────────────────── */
 .ct-wrap {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    overflow-x: auto;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    background: #FFFFFF; border: 1px solid #E2E8F0;
+    border-radius: 12px; overflow-x: auto;
+    box-shadow: 0 4px 24px rgba(15,23,42,0.07);
 }
-.ct { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ct { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ct thead tr { background: linear-gradient(135deg,#1B3A8A 0%,#2563EB 100%); }
 .ct th {
-    background: #F8FAFC; color: #475569; font-weight: 600;
-    padding: 10px 14px; border-bottom: 2px solid #E2E8F0;
-    border-right: 1px solid #F1F5F9; text-align: center;
-    white-space: nowrap; min-width: 88px; position: sticky; top: 0;
+    color: rgba(255,255,255,0.92) !important; font-weight: 600;
+    padding: 13px 16px; border-bottom: none;
+    border-right: 1px solid rgba(255,255,255,0.12); text-align: center;
+    white-space: nowrap; min-width: 90px; position: sticky; top: 0;
+    background: transparent; letter-spacing: 0.3px;
 }
-.ct th.elem-col { text-align: left; min-width: 240px; max-width: 320px; }
+.ct th.elem-col { text-align: left; min-width: 240px; max-width: 380px; }
 .ct td {
-    padding: 8px 14px; border-bottom: 1px solid #F8FAFC;
-    border-right: 1px solid #F8FAFC; text-align: center; vertical-align: middle;
+    padding: 11px 16px; border-bottom: 1px solid #F1F5F9;
+    border-right: 1px solid #F8FAFC;
+    text-align: center; vertical-align: middle;
 }
-.ct td.elem-cell { text-align: left; color: #1E293B; font-weight: 500; white-space: normal; word-break: break-word; min-width: 260px; max-width: 480px; line-height: 1.5; }
-.ct tbody tr:hover td { background: #F8FAFC; }
+.ct td.elem-cell {
+    text-align: left; color: #1E293B; font-weight: 500;
+    white-space: normal; word-break: break-word;
+    min-width: 260px; max-width: 480px; line-height: 1.65; font-size: 12px;
+}
+.ct tbody tr:nth-child(even) td { background: #FAFBFF; }
+.ct tbody tr:hover td { background: #EFF6FF !important; }
 .ct tr:last-child td { border-bottom: none; }
-.c-direct  { color: #059669; font-weight: 700; font-size: 16px; }
-.c-added   { color: #2563EB; font-weight: 700; font-size: 13px; }
-.c-inherit { color: #CBD5E1; font-size: 14px; }
-.c-none    { color: #E2E8F0; font-size: 14px; }
+.c-direct  { color: #059669; font-weight: 700; font-size: 18px; }
+.c-added   { color: #2563EB; font-weight: 700; font-size: 14px; }
+.c-inherit { color: #CBD5E1; font-size: 15px; }
+.c-none    { color: #E2E8F0; font-size: 15px; }
 
 /* Badges */
-.badge { display: inline-block; padding: 2px 7px; border-radius: 20px; font-size: 9px; font-weight: 700; letter-spacing: 0.3px; margin-top: 3px; }
-.b-ind   { background: #DBEAFE; color: #1D4ED8; }
-.b-dep   { background: #F1F5F9; color: #475569; }
-.b-multi { background: #EDE9FE; color: #5B21B6; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; margin-top: 4px; }
+.b-ind   { background: rgba(37,99,235,0.10); color: #1D4ED8; border: 1px solid rgba(37,99,235,0.20); }
+.b-dep   { background: #F1F5F9; color: #475569; border: 1px solid #E2E8F0; }
+.b-multi { background: rgba(124,58,237,0.10); color: #5B21B6; border: 1px solid rgba(124,58,237,0.22); }
 
 /* Legend */
-.legend { display: flex; gap: 20px; font-size: 11px; color: #64748B; padding: 12px 16px; border-top: 1px solid #F1F5F9; }
+.legend {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    font-size: 11px; color: #64748B;
+    padding: 12px 18px; border-top: 1px solid #F1F5F9;
+    background: #FAFBFF; border-radius: 0 0 12px 12px;
+}
 
 /* ── Comparison table ──────────────────────────── */
 .cov-high { color: #059669; font-weight: 700; }
@@ -234,23 +287,18 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
 
 /* ── Panel card ────────────────────────────────── */
 .panel {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 10px;
-    padding: 16px 18px;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    background: #FFFFFF; border: 1px solid #E2E8F0;
+    border-radius: 12px; padding: 20px 24px;
+    box-shadow: 0 4px 24px rgba(15,23,42,0.07);
 }
-.panel-title { font-size: 13px; font-weight: 600; color: #0F172A; margin-bottom: 2px; }
-.panel-sub   { font-size: 11px; color: #94A3B8; margin-bottom: 10px; }
+.panel-title { font-size: 14px; font-weight: 700; color: #0F172A; margin-bottom: 4px; }
+.panel-sub   { font-size: 11.5px; color: #94A3B8; margin-bottom: 14px; line-height: 1.6; }
 
 /* ── Empty state ───────────────────────────────── */
-.empty {
-    text-align: center; padding: 100px 0;
-    color: #CBD5E1; user-select: none;
-}
-.empty-icon { font-size: 48px; margin-bottom: 16px; }
-.empty-title { font-size: 15px; font-weight: 600; color: #94A3B8; margin-bottom: 6px; }
-.empty-sub { font-size: 12px; color: #CBD5E1; }
+.empty { text-align: center; padding: 120px 0; user-select: none; }
+.empty-icon { font-size: 56px; margin-bottom: 20px; }
+.empty-title { font-size: 16px; font-weight: 700; color: #94A3B8; margin-bottom: 8px; }
+.empty-sub { font-size: 12.5px; color: #CBD5E1; line-height: 1.7; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -869,8 +917,9 @@ def main():
     with st.sidebar:
         st.markdown("""
         <div class="sb-logo">
-            <div class="sb-logo-title">⚖ Patent Claim Analyzer</div>
-            <div class="sb-logo-sub">Graph Theory · No AI</div>
+            <div class="sb-logo-icon">⚖</div>
+            <div class="sb-logo-title">Patent Claim Analyzer</div>
+            <div class="sb-logo-sub">Graph Theory · Non-generative AI</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -989,17 +1038,16 @@ def main():
         """, unsafe_allow_html=True)
         return
 
-    # ── Header ──────────────────────────────────────────────
-    col_h, col_badge = st.columns([6, 1])
-    with col_h:
-        st.markdown(
-            f'<div class="app-header">'
-            f'<span class="app-title">Patent Claim Analyzer</span>'
-            f'<span class="app-badge">{n_patents} 件読み込み済み</span>'
-            f'</div>'
-            f'<div class="app-sub">構文解析 + グラフ理論 — 非生成AI</div>',
-            unsafe_allow_html=True,
-        )
+    # ── Hero header ─────────────────────────────────────────
+    st.markdown(
+        f'<div class="hero-strip">'
+        f'<div class="hero-title">Patent Claim <span>Analyzer</span></div>'
+        f'<div class="hero-sub">構文解析 + グラフ理論 ─ 非生成AI · 決定論的 · 再現可能</div>'
+        f'<div><span class="hero-badge">⚡ {n_patents} 件読み込み済み</span></div>'
+        f'<div class="hero-ghost">C</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     # ── Active patent data ───────────────────────────────────
     active = st.session_state.active
@@ -1015,23 +1063,27 @@ def main():
     # ── Metrics ─────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(f'<div class="metric-card"><div class="mc-label">請求項数</div>'
-                    f'<div class="mc-value">{m["n_claims"]}</div>'
+        st.markdown(f'<div class="metric-card mc-blue">'
+                    f'<div class="mc-label">請求項数</div>'
+                    f'<div class="mc-value blue">{m["n_claims"]}</div>'
                     f'<div class="mc-sub">独立 {m["n_ind"]} ／ 従属 {m["n_dep"]}</div></div>',
                     unsafe_allow_html=True)
     with c2:
-        st.markdown(f'<div class="metric-card"><div class="mc-label">最大従属深さ</div>'
-                    f'<div class="mc-value">{m["max_depth"]}</div>'
+        st.markdown(f'<div class="metric-card mc-cyan">'
+                    f'<div class="mc-label">最大従属深さ</div>'
+                    f'<div class="mc-value cyan">{m["max_depth"]}</div>'
                     f'<div class="mc-sub">多重従属 {m["n_multi"]} 件</div></div>',
                     unsafe_allow_html=True)
     with c3:
-        st.markdown(f'<div class="metric-card"><div class="mc-label">独立項数</div>'
-                    f'<div class="mc-value">{m["n_ind"]}</div>'
+        st.markdown(f'<div class="metric-card mc-green">'
+                    f'<div class="mc-label">独立項数</div>'
+                    f'<div class="mc-value green">{m["n_ind"]}</div>'
                     f'<div class="mc-sub">権利範囲の軸</div></div>',
                     unsafe_allow_html=True)
     with c4:
-        st.markdown(f'<div class="metric-card"><div class="mc-label">ユニーク構成要件</div>'
-                    f'<div class="mc-value">{m["n_elements"]}</div>'
+        st.markdown(f'<div class="metric-card mc-purple">'
+                    f'<div class="mc-label">ユニーク構成要件</div>'
+                    f'<div class="mc-value purple">{m["n_elements"]}</div>'
                     f'<div class="mc-sub">要素ノード {len(elem_G.nodes())} 個</div></div>',
                     unsafe_allow_html=True)
 
