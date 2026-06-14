@@ -17,6 +17,12 @@ try:
 except ImportError:
     PDF_OK = False
 
+try:
+    from sentence_transformers import SentenceTransformer
+    SBERT_OK = True
+except ImportError:
+    SBERT_OK = False
+
 # ─────────────────────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────────────────────
@@ -276,6 +282,11 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
 .ct thead .b-dep   { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.78); border: 1px solid rgba(255,255,255,0.22); }
 .ct thead .b-multi { background: rgba(167,139,250,0.30); color: #EDE9FE; border: 1px solid rgba(167,139,250,0.55); }
 
+/* Breadth score bar */
+.bw-wrap { width:80%; height:3px; background:rgba(255,255,255,0.18); border-radius:2px; margin:6px auto 3px; }
+.bw-bar  { height:3px; border-radius:2px; transition:width 0.4s; }
+.bw-lbl  { font-size:9px; font-weight:700; display:block; margin-top:2px; }
+
 /* Legend */
 .legend {
     display: flex; gap: 24px; flex-wrap: wrap;
@@ -457,6 +468,163 @@ def build_elem_graph(claims: dict, resolved: dict):
                 else:
                     G.add_edge(ids[i], ids[j], weight=1)
     return G
+
+
+# ─────────────────────────────────────────────────────────────
+# クレーム広狭スコア (USPTO手法: 語数 + 限定語密度 + 要素数)
+# ─────────────────────────────────────────────────────────────
+LIMITER_PATTERNS = [
+    r'特定の', r'所定の', r'予め定め', r'あらかじめ定め',
+    r'[0-9０-９]+\s*(?:以上|以下|未満|超過)',
+    r'[0-9０-９]+\s*(?:%|％|mm|cm|m\b|kg|g\b)',
+    r'[0-9０-９]+\s*〜\s*[0-9０-９]+',
+    r'から.{1,6}まで', r'のうち[のい]?ず?れか',
+    r'少なくとも[一1]つ', r'ただし', r'但し',
+    r'のみ(?=[をがはに、。])',
+]
+
+def compute_breadth_scores(claims: dict) -> dict:
+    scores = {}
+    for num, c in claims.items():
+        body = c['body']
+        chars = len(re.sub(r'\s', '', body))
+        n_lim = sum(len(re.findall(p, body)) for p in LIMITER_PATTERNS)
+        n_elem = len(c['elements'])
+        char_s = max(0.0, 1 - chars / 600) * 40
+        lim_s  = max(0.0, 1 - n_lim / 8)  * 35
+        elem_s = max(0.0, 1 - n_elem / 8)  * 25
+        raw    = char_s + lim_s + elem_s
+        level  = '広' if raw >= 62 else ('中' if raw >= 35 else '狭')
+        color  = '#059669' if level == '広' else ('#D97706' if level == '中' else '#DC2626')
+        scores[num] = {
+            'score': round(raw), 'level': level, 'color': color,
+            'chars': chars, 'n_lim': n_lim, 'n_elem': n_elem,
+        }
+    return scores
+
+
+# ─────────────────────────────────────────────────────────────
+# inner-claim 要素間依存グラフ (FLAN-Graph ACL 2024 手法)
+# ─────────────────────────────────────────────────────────────
+def build_inner_dag(claim: dict) -> nx.DiGraph:
+    G = nx.DiGraph()
+    elems = claim['elements']
+    for i, e in enumerate(elems):
+        short = re.sub(r'^前記|^その|^当該|^上記', '', e)
+        short = re.split(r'[をがはにでのと、。]', short)[0][:18]
+        G.add_node(i, text=e, label=f'E{i+1}', short=short)
+    for j in range(1, len(elems)):
+        refs = re.findall(
+            r'前記([぀-ヿ一-鿿\w]{2,20}?)(?=[をがはにでのと、。])',
+            elems[j],
+        )
+        matched = set()
+        for ref in refs:
+            for i in range(j - 1, -1, -1):
+                if ref in elems[i] and i not in matched:
+                    G.add_edge(i, j, ref=ref)
+                    matched.add(i)
+                    break
+    return G
+
+
+def plot_inner_dag(claim: dict, claim_num: int) -> go.Figure:
+    G = build_inner_dag(claim)
+    n = len(G.nodes())
+    if n == 0:
+        return go.Figure()
+
+    xs = list(range(n))
+    ys = [0] * n
+
+    fig = go.Figure()
+
+    # 依存エッジ — 上向き放物線アーチ
+    for (src, dst) in G.edges():
+        x0, x1 = xs[src], xs[dst]
+        t = np.linspace(0, 1, 40)
+        mid = (x0 + x1) / 2
+        arc_h = max(0.3, abs(x1 - x0) * 0.4)
+        bx = (1 - t) ** 2 * x0 + 2 * (1 - t) * t * mid + t ** 2 * x1
+        by = (1 - t) ** 2 * 0  + 2 * (1 - t) * t * arc_h + t ** 2 * 0
+        fig.add_trace(go.Scatter(
+            x=list(bx) + [None], y=list(by) + [None],
+            mode='lines',
+            line=dict(color='#2563EB', width=1.5, dash='dot'),
+            hoverinfo='skip', showlegend=False,
+        ))
+        # 矢印代わりの三角マーカー
+        fig.add_annotation(
+            x=x1, y=0, ax=bx[-4], ay=by[-4],
+            xref='x', yref='y', axref='x', ayref='y',
+            showarrow=True, arrowhead=2, arrowsize=1.2,
+            arrowwidth=1.5, arrowcolor='#2563EB',
+        )
+
+    # ノード
+    node_x = [xs[i] for i in G.nodes()]
+    node_y = [ys[i] for i in G.nodes()]
+    node_short = [G.nodes[i]['short'] for i in G.nodes()]
+    node_label = [G.nodes[i]['label'] for i in G.nodes()]
+    in_deg = [G.in_degree(i) for i in G.nodes()]
+    colors = ['#2563EB' if d == 0 else '#7C3AED' for d in in_deg]
+
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers+text',
+        marker=dict(size=28, color=colors,
+                    line=dict(width=2, color='white')),
+        text=node_label,
+        textposition='middle center',
+        textfont=dict(size=10, color='white', family='monospace'),
+        customdata=node_short,
+        hovertemplate='<b>%{text}</b><br>%{customdata}<extra></extra>',
+        showlegend=False,
+    ))
+
+    # 要素名ラベル（ノード下）
+    for i in G.nodes():
+        fig.add_annotation(
+            x=xs[i], y=-0.22, text=G.nodes[i]['short'],
+            showarrow=False, font=dict(size=9, color='#475569'),
+            xref='x', yref='y',
+        )
+
+    fig.update_layout(
+        height=200,
+        margin=dict(l=10, r=10, t=10, b=30),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
+                   range=[-0.7, n - 0.3]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
+                   range=[-0.45, 0.85]),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        dragmode=False,
+    )
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────
+# SBERT (multilingual-e5-small) ローダー
+# ─────────────────────────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def load_sbert():
+    if not SBERT_OK:
+        return None
+    try:
+        return SentenceTransformer('intfloat/multilingual-e5-small')
+    except Exception:
+        return None
+
+
+def sbert_sim(e1: str, e2: str, model) -> float:
+    if model is None:
+        return 0.0
+    embs = model.encode(
+        [f'passage: {e1}', f'passage: {e2}'],
+        normalize_embeddings=True,
+    )
+    return float(np.dot(embs[0], embs[1]))
 
 
 def compute_metrics(claims: dict, elem_G) -> dict:
@@ -781,26 +949,31 @@ def _bigrams(s: str) -> set:
     return {s[i:i+2] for i in range(len(s)-1)} if len(s)>1 else {s}
 
 
-def build_comparison(patents: dict) -> pd.DataFrame:
+def build_comparison(patents: dict, sbert_model=None) -> pd.DataFrame:
     """
     patents: {name: {claims, resolved}}
     全請求項（独立項 + 従属項の追加要素）を横断比較
-    bigram Jaccard ≥ 0.25 で同一要素とみなす
+    sbert_model が None のとき: bigram Jaccard ≥ 0.25
+    sbert_model 指定時: SBERT コサイン類似度 ≥ 0.75 で同一要素とみなす
     groups: [[full_elem, claim_label, {pname: elem}], ...]
     """
     pnames = list(patents.keys())
     groups = []  # [full_elem_for_matching, claim_label, {pname: elem}]
 
+    def _similar(a: str, b: str) -> bool:
+        if sbert_model is not None:
+            return sbert_sim(a, b, sbert_model) >= 0.75
+        bg_a, bg_b = _bigrams(a), _bigrams(b)
+        union = bg_a | bg_b
+        return bool(union) and len(bg_a & bg_b) / len(union) >= 0.25
+
     for pname, data in patents.items():
         for num, c in data['claims'].items():
             claim_lbl = f"C{num}({'独' if c['is_independent'] else '従'})"
             for elem in c['elements']:
-                bg = _bigrams(elem)
                 matched = False
                 for g in groups:
-                    canon_bg = _bigrams(g[0])  # g[0] = full text for matching
-                    union = bg | canon_bg
-                    if union and len(bg & canon_bg)/len(union) >= 0.25:
+                    if _similar(elem, g[0]):
                         if pname not in g[2]:
                             g[2][pname] = elem
                         matched = True; break
@@ -823,11 +996,11 @@ def build_comparison(patents: dict) -> pd.DataFrame:
     return df, shorts, pnames
 
 
-def render_comparison(patents: dict) -> str:
+def render_comparison(patents: dict, sbert_model=None) -> str:
     if len(patents) < 2:
         return "<p style='color:#94A3B8;padding:20px'>2件以上の特許を読み込むと対比表が表示されます。</p>"
 
-    df, shorts, pnames = build_comparison(patents)
+    df, shorts, pnames = build_comparison(patents, sbert_model=sbert_model)
     if df.empty:
         return "<p style='color:#94A3B8;padding:20px'>構成要件を抽出できませんでした。</p>"
 
@@ -876,13 +1049,19 @@ def render_claim_chart(claims: dict, resolved: dict) -> str:
     if not all_elems:
         return "<p style='color:#94A3B8;padding:20px'>構成要件を抽出できませんでした。</p>"
 
+    bs = compute_breadth_scores(claims)
     rows = ['<div class="ct-wrap"><table class="ct"><thead><tr><th class="elem-col">構成要件</th>']
     for n in nums:
-        c = claims[n]
+        c = claims[n]; bsi = bs[n]
         if c['is_independent']:   badge = '<span class="badge b-ind">独立項</span>'
         elif c['is_multi_dep']:   badge = '<span class="badge b-multi">多重従属</span>'
         else:                     badge = f'<span class="badge b-dep">→ C{c["parents"][0]}</span>'
-        rows.append(f'<th>C{n}<br>{badge}</th>')
+        rows.append(
+            f'<th>C{n}<br>{badge}'
+            f'<div class="bw-wrap"><div class="bw-bar" style="width:{bsi["score"]}%;background:{bsi["color"]}"></div></div>'
+            f'<span class="bw-lbl" style="color:{bsi["color"]}">{bsi["score"]}点 {bsi["level"]}</span>'
+            f'</th>'
+        )
     rows.append('</tr></thead><tbody>')
 
     for elem in all_elems:
@@ -1183,6 +1362,40 @@ def main():
                             unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # inner-claim 要素間依存グラフ
+        n_inner_cols = min(len(claims), 3)
+        inner_claims = sorted(
+            [(n, c) for n, c in claims.items() if len(c['elements']) >= 2],
+            key=lambda x: x[0],
+        )[:n_inner_cols * 2]
+        if inner_claims:
+            st.markdown('<div class="panel" style="margin-top:12px">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title">inner-claim 要素間依存グラフ（FLAN-Graph手法）</div>',
+                        unsafe_allow_html=True)
+            st.markdown(
+                '<div class="panel-sub">'
+                '<b style="color:#2563EB">●</b> 先行要素 &nbsp;·&nbsp; '
+                '<b style="color:#7C3AED">●</b> 参照先要素 &nbsp;·&nbsp; '
+                '<b style="color:#2563EB">---→</b> 前記X 参照関係'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            cols_inner = st.columns(min(len(inner_claims), 3))
+            for idx, (cnum, cclaim) in enumerate(inner_claims):
+                with cols_inner[idx % 3]:
+                    st.markdown(f'<div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:4px">C{cnum}</div>',
+                                unsafe_allow_html=True)
+                    ig = build_inner_dag(cclaim)
+                    if len(ig.edges()) > 0:
+                        st.plotly_chart(plot_inner_dag(cclaim, cnum),
+                                        use_container_width=True,
+                                        config={'displayModeBar': False},
+                                        key=f'inner_{cnum}')
+                    else:
+                        st.markdown('<div style="font-size:11px;color:#94A3B8;padding:8px 0">前記参照なし</div>',
+                                    unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
     with tab_net:
         left, right = st.columns([1.1, 1], gap="medium")
         with left:
@@ -1217,10 +1430,39 @@ def main():
 
     if tab_comp is not None:
         with tab_comp:
-            st.markdown('<div style="font-size:12px;color:#64748B;margin-bottom:12px">'
-                        '独立項の構成要件を横断比較します。bigram類似度 ≥ 0.33 で同一要素とみなします。'
-                        '</div>', unsafe_allow_html=True)
-            st.markdown(render_comparison(st.session_state.patents), unsafe_allow_html=True)
+            use_sbert = False
+            if SBERT_OK:
+                use_sbert = st.toggle(
+                    'SBERT 意味類似度を使用（multilingual-e5-small）',
+                    value=False,
+                    help='bigram Jaccard に加えてエンコーダ埋め込みのコサイン類似度で補完します。初回はモデルをダウンロードします。',
+                )
+            else:
+                st.markdown(
+                    '<div style="font-size:11px;color:#94A3B8;margin-bottom:8px">'
+                    'sentence-transformers 未インストール — bigram Jaccard のみ使用します。'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+            sbert_model = None
+            if use_sbert:
+                with st.spinner('モデルを読み込んでいます…'):
+                    sbert_model = load_sbert()
+                if sbert_model is None:
+                    st.warning('モデルの読み込みに失敗しました。bigram Jaccard で代替します。')
+
+            st.markdown(
+                '<div style="font-size:12px;color:#64748B;margin-bottom:12px">'
+                '全請求項の構成要件を横断比較します。'
+                + ('SBERT コサイン類似度 ≥ 0.75 で同一要素とみなします。'
+                   if use_sbert and sbert_model is not None
+                   else 'bigram Jaccard ≥ 0.25 で同一要素とみなします。')
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(render_comparison(st.session_state.patents, sbert_model=sbert_model),
+                        unsafe_allow_html=True)
 
 
 if __name__ == '__main__':
