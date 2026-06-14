@@ -266,11 +266,15 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
 .c-inherit { color: #CBD5E1; font-size: 15px; }
 .c-none    { color: #E2E8F0; font-size: 15px; }
 
-/* Badges */
+/* Badges — ライト背景用 */
 .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; margin-top: 4px; }
 .b-ind   { background: rgba(37,99,235,0.10); color: #1D4ED8; border: 1px solid rgba(37,99,235,0.20); }
 .b-dep   { background: #F1F5F9; color: #475569; border: 1px solid #E2E8F0; }
 .b-multi { background: rgba(124,58,237,0.10); color: #5B21B6; border: 1px solid rgba(124,58,237,0.22); }
+/* Badges — ダーク背景（テーブルヘッダー）用 */
+.ct thead .b-ind   { background: rgba(255,255,255,0.18); color: #fff; border: 1px solid rgba(255,255,255,0.35); }
+.ct thead .b-dep   { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.78); border: 1px solid rgba(255,255,255,0.22); }
+.ct thead .b-multi { background: rgba(167,139,250,0.30); color: #EDE9FE; border: 1px solid rgba(167,139,250,0.55); }
 
 /* Legend */
 .legend {
@@ -530,154 +534,195 @@ def bezier_curve(x0, y0, x1, y1, n=28):
 
 
 def _elem_keyword(elem: str) -> str:
-    """要素テキストから主要キーワードを抽出（最大12文字）"""
     e = re.sub(r'^前記|^その|^当該|^上記', '', elem.strip())
     e = re.split(r'[をがはにでのと、]', e)[0].strip()
     return e[:12] if e else ''
 
 
-def plot_mindmap(claims: dict) -> go.Figure:
+def plot_claim_dag(claims: dict) -> go.Figure:
+    """クレーム依存DAG — 矢印付き有向グラフ + 要素類似破線"""
     pos = compute_tree_pos(claims)
     if not pos: return go.Figure()
 
-    # ── 親子集合（スキップ判定用）──────────────────
     parent_set = {n: set(c['parents']) for n, c in claims.items()}
-
-    # ── 要素類似度エッジ（非従属ペア）─────────────
     claim_texts = {n: ' '.join(c['elements']) for n, c in claims.items()}
     claim_nums = sorted(claims.keys())
+
+    # ── 要素類似エッジ（非従属ペア）─────────────
     sim_pairs = []
     for i in range(len(claim_nums)):
         for j in range(i + 1, len(claim_nums)):
             n1, n2 = claim_nums[i], claim_nums[j]
             if n2 in parent_set[n1] or n1 in parent_set[n2]: continue
             if n1 not in pos or n2 not in pos: continue
-            bg1 = _bigrams(claim_texts[n1])
-            bg2 = _bigrams(claim_texts[n2])
+            bg1 = _bigrams(claim_texts[n1]); bg2 = _bigrams(claim_texts[n2])
             union = bg1 | bg2
             sim = len(bg1 & bg2) / len(union) if union else 0
             if sim >= 0.15:
                 sim_pairs.append((n1, n2, sim))
-    sim_pairs.sort(key=lambda x: -x[2])
-    sim_pairs = sim_pairs[:10]  # 上位10ペアのみ表示
+    sim_pairs.sort(key=lambda x: -x[2]); sim_pairs = sim_pairs[:10]
 
-    # ── 従属エッジ（ベジェ曲線）──────────────────
-    edge_x, edge_y = [], []
+    fig = go.Figure()
+
+    # 類似エッジ（破線・アンバー）
+    for n1, n2, sim in sim_pairs:
+        x0, y0 = pos[n1]; x1, y1 = pos[n2]
+        alpha = min(0.25 + sim * 1.2, 0.75)
+        fig.add_trace(go.Scatter(
+            x=[x0, x1, None], y=[y0, y1, None], mode='lines',
+            line=dict(width=1.8, color=f'rgba(245,158,11,{alpha:.2f})', dash='dot'),
+            hoverinfo='text', hovertext=f'C{n1} ↔ C{n2}　要素類似: {sim:.0%}',
+            showlegend=False, name='',
+        ))
+
+    # 従属エッジ（矢印アノテーション — 有向）
+    annotations = []
     for n, c in claims.items():
         if n not in pos: continue
         x1, y1 = pos[n]
         for p in c['parents']:
-            if p in pos:
-                x0, y0 = pos[p]
-                bx, by = bezier_curve(x0, y0, x1, y1)
-                edge_x.extend(bx); edge_y.extend(by)
+            if p not in pos: continue
+            x0, y0 = pos[p]
+            annotations.append(dict(
+                x=x1, y=y1, ax=x0, ay=y0,
+                xref='x', yref='y', axref='x', ayref='y',
+                arrowhead=2, arrowsize=1.2, arrowwidth=2.0,
+                arrowcolor='#94A3B8',
+                showarrow=True, text='',
+                standoff=20,
+            ))
 
-    # ── ノード ──────────────────────────────────────
+    # ノード下ラベル
+    for n in sorted(claims.keys()):
+        if n not in pos: continue
+        c = claims[n]; x, y = pos[n]
+        kind = '独立' if c['is_independent'] else ('多重従属' if c['is_multi_dep'] else '従属')
+        kw = _elem_keyword(c['elements'][0]) if c['elements'] else ''
+        annotations.append(dict(
+            x=x, y=y - 0.75,
+            text=f"<span style='font-size:9px;color:#64748B'>{kind}" +
+                 (f"<br><span style='font-size:8px'>{kw}</span>" if kw else '') + "</span>",
+            showarrow=False, font=dict(size=9, color='#64748B'),
+        ))
+
+    # レジェンドダミー
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines',
+        line=dict(color='#94A3B8', width=2), name='従属関係 ▶', showlegend=True))
+    if sim_pairs:
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines',
+            line=dict(color='#F59E0B', width=2, dash='dot'), name='要素類似', showlegend=True))
+
+    # ノード
     nx_, ny_, ntxt, nclr, nsz, nhov = [], [], [], [], [], []
     for n in sorted(claims.keys()):
         if n not in pos: continue
-        c = claims[n]
-        x, y = pos[n]
-        nx_.append(x); ny_.append(y)
-        ntxt.append(str(n))
-        dep = "独立項" if c['is_independent'] else f"→ C{', '.join(str(p) for p in c['parents'])}"
-        preview = c['body'][:150].replace('\n', ' ') + ('…' if len(c['body']) > 150 else '')
-        nhov.append(
-            f"<b>請求項 {n}</b>　{dep}<br>"
-            f"要素数: {len(c['elements'])} ／ 種別: {c['type']}<br>"
-            f"<span style='color:#94A3B8;font-size:11px'>{preview}</span>"
-            f"<extra></extra>"
-        )
-        if c['is_independent']:
-            nclr.append('#2563EB'); nsz.append(48)
-        elif c['is_multi_dep']:
-            nclr.append('#7C3AED'); nsz.append(38)
-        else:
-            nclr.append('#475569'); nsz.append(38)
+        c = claims[n]; x, y = pos[n]
+        nx_.append(x); ny_.append(y); ntxt.append(str(n))
+        dep = '独立項' if c['is_independent'] else f"→ C{', '.join(str(p) for p in c['parents'])}"
+        preview = c['body'][:120].replace('\n', ' ') + ('…' if len(c['body']) > 120 else '')
+        nhov.append(f"<b>請求項 {n}</b>　{dep}<br>要素数: {len(c['elements'])} ／ {c['type']}<br>"
+                    f"<span style='color:#94A3B8;font-size:11px'>{preview}</span><extra></extra>")
+        if c['is_independent']:   nclr.append('#2563EB'); nsz.append(48)
+        elif c['is_multi_dep']:   nclr.append('#7C3AED'); nsz.append(40)
+        else:                     nclr.append('#475569'); nsz.append(40)
 
-    fig = go.Figure()
-
-    # 要素類似エッジ（破線・アンバー）
-    for n1, n2, sim in sim_pairs:
-        x0, y0 = pos[n1]; x1, y1 = pos[n2]
-        alpha = min(0.25 + sim * 1.2, 0.80)
-        fig.add_trace(go.Scatter(
-            x=[x0, x1, None], y=[y0, y1, None],
-            mode='lines',
-            line=dict(width=1.8, color=f'rgba(245,158,11,{alpha:.2f})', dash='dot'),
-            hoverinfo='text',
-            hovertext=f'C{n1} ↔ C{n2} 要素類似度: {sim:.0%}',
-            showlegend=False, name='',
-        ))
-
-    # 従属エッジ（ベジェ・グレー）
-    fig.add_trace(go.Scatter(
-        x=edge_x, y=edge_y, mode='lines',
-        line=dict(width=2.2, color='#94A3B8'),
-        hoverinfo='none', showlegend=False,
-    ))
-
-    # レジェンド用ダミートレース
-    fig.add_trace(go.Scatter(
-        x=[None], y=[None], mode='lines',
-        line=dict(color='#94A3B8', width=2),
-        name='従属関係', showlegend=True,
-    ))
-    if sim_pairs:
-        fig.add_trace(go.Scatter(
-            x=[None], y=[None], mode='lines',
-            line=dict(color='#F59E0B', width=2, dash='dot'),
-            name='要素類似', showlegend=True,
-        ))
-
-    # ノード
     fig.add_trace(go.Scatter(
         x=nx_, y=ny_, mode='markers+text',
         marker=dict(size=nsz, color=nclr, line=dict(width=3, color='white')),
-        text=ntxt,
-        textposition='middle center',
+        text=ntxt, textposition='middle center',
         textfont=dict(color='white', size=14, family='SF Mono, Menlo, Arial Black'),
         hovertemplate=nhov, name='', showlegend=False,
     ))
 
-    # ノード下ラベル（種別 + 最初の要素キーワード）
-    annotations = []
-    for n in sorted(claims.keys()):
-        if n not in pos: continue
-        c = claims[n]
-        x, y = pos[n]
-        kind = '独立' if c['is_independent'] else ('多重' if c['is_multi_dep'] else '従属')
-        kw = _elem_keyword(c['elements'][0]) if c['elements'] else ''
-        kw_str = f' · {kw}' if kw else ''
-        annotations.append(dict(
-            x=x, y=y - 0.72,
-            text=f"<span style='font-size:9px;color:#64748B'>{kind}{kw_str}</span>",
-            showarrow=False,
-            font=dict(size=9, color='#64748B'),
-        ))
-
     all_x = [pos[n][0] for n in pos]; all_y = [pos[n][1] for n in pos]
-    px = max((max(all_x) - min(all_x)) * 0.08, 0.5)
-    py = max((max(all_y) - min(all_y)) * 0.15, 0.8)
+    px_ = max((max(all_x) - min(all_x)) * 0.10, 0.6)
+    py_ = max((max(all_y) - min(all_y)) * 0.20, 1.0)
 
     fig.update_layout(
-        annotations=annotations,
-        showlegend=True,
-        legend=dict(
-            x=0.01, y=0.01, xanchor='left', yanchor='bottom',
-            bgcolor='rgba(241,245,249,0.9)',
-            bordercolor='#E2E8F0', borderwidth=1,
-            font=dict(size=11, color='#475569'),
-        ),
+        annotations=annotations, showlegend=True,
+        legend=dict(x=0.01, y=0.01, xanchor='left', yanchor='bottom',
+                    bgcolor='rgba(241,245,249,0.92)', bordercolor='#E2E8F0', borderwidth=1,
+                    font=dict(size=11, color='#475569')),
         margin=dict(l=20, r=20, t=20, b=20),
         paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
-                   range=[min(all_x)-px, max(all_x)+px]),
+                   range=[min(all_x)-px_, max(all_x)+px_]),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
-                   range=[min(all_y)-py, max(all_y)+py]),
-        height=500,
-        hoverlabel=dict(bgcolor='#0F172A', font_color='#F1F5F9',
-                        font_size=12, bordercolor='#1E293B'),
+                   range=[min(all_y)-py_, max(all_y)+py_]),
+        height=420,
+        hoverlabel=dict(bgcolor='#0F172A', font_color='#F1F5F9', font_size=12, bordercolor='#1E293B'),
+    )
+    return fig
+
+
+def plot_claim_matrix(claims: dict) -> go.Figure:
+    """クレーム間の要素類似度ヒートマップ（bigram Jaccard）"""
+    nums = sorted(claims.keys())
+    if len(nums) < 2: return go.Figure()
+
+    texts = {n: ' '.join(claims[n]['elements']) for n in nums}
+    parent_set = {n: set(claims[n]['parents']) for n in nums}
+
+    z, hover, annotations = [], [], []
+    labels = [f'C{n}' for n in nums]
+
+    for i, ni in enumerate(nums):
+        row_z, row_h = [], []
+        for j, nj in enumerate(nums):
+            if ni == nj:
+                row_z.append(1.0); row_h.append('同一')
+            else:
+                bg1 = _bigrams(texts[ni]); bg2 = _bigrams(texts[nj])
+                union = bg1 | bg2
+                sim = len(bg1 & bg2) / len(union) if union else 0.0
+                row_z.append(sim)
+                dep_mark = ' ▶' if nj in parent_set[ni] or ni in parent_set[nj] else ''
+                row_h.append(f'C{ni} ↔ C{nj}{dep_mark}<br>類似度: {sim:.0%}')
+            # セルの数値テキスト
+            val = row_z[-1]
+            txt = f'{val:.0%}' if val > 0.01 else ''
+            txt_color = '#fff' if val > 0.5 else '#1E293B'
+            annotations.append(dict(
+                x=j, y=i, text=txt, showarrow=False,
+                font=dict(size=10, color=txt_color),
+                xref='x', yref='y',
+            ))
+        z.append(row_z); hover.append(row_h)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z, x=labels, y=labels,
+        colorscale=[[0,'#F8FAFF'],[0.15,'#DBEAFE'],[0.45,'#60A5FA'],[0.75,'#2563EB'],[1,'#1D4ED8']],
+        showscale=True,
+        colorbar=dict(thickness=10, len=0.75,
+                      tickfont=dict(size=10, color='#64748B'),
+                      title=dict(text='類似度', font=dict(size=10, color='#64748B'), side='right')),
+        customdata=hover,
+        hovertemplate='%{customdata}<extra></extra>',
+        zmin=0, zmax=1,
+    ))
+
+    # 従属関係セルに枠線
+    for ni in nums:
+        for p in claims[ni]['parents']:
+            if p in nums:
+                i = nums.index(ni); j = nums.index(p)
+                for xi, yi in [(i, j), (j, i)]:
+                    fig.add_shape(type='rect',
+                        x0=xi-0.5, x1=xi+0.5, y0=yi-0.5, y1=yi+0.5,
+                        line=dict(color='#2563EB', width=2),
+                        xref='x', yref='y',
+                    )
+
+    fig.update_layout(
+        annotations=annotations,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
+        height=300,
+        xaxis=dict(tickfont=dict(size=12, color='#1E293B'), side='top',
+                   showgrid=False, zeroline=False),
+        yaxis=dict(tickfont=dict(size=12, color='#1E293B'), autorange='reversed',
+                   showgrid=False, zeroline=False),
+        hoverlabel=dict(bgcolor='#0F172A', font_color='#F1F5F9', font_size=12),
     )
     return fig
 
@@ -1090,7 +1135,7 @@ def main():
     st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
 
     # ── Tabs ────────────────────────────────────────────────
-    tabs = ["　クレームチャート　", "　マインドマップ　", "　要素ネットワーク　"]
+    tabs = ["　クレームチャート　", "　クレーム構造グラフ　", "　要素ネットワーク　"]
     if n_patents >= 2:
         tabs.append("　対比表　")
 
@@ -1102,24 +1147,41 @@ def main():
         st.markdown(render_claim_chart(claims, resolved), unsafe_allow_html=True)
 
     with tab_map:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title">クレーム関係構造 — マインドマップ</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-sub">'
-            '🔵 独立項 &nbsp;·&nbsp; 🟣 多重従属 &nbsp;·&nbsp; ⬤ 従属項'
-            '&nbsp;｜&nbsp;'
-            '<b style="color:#94A3B8">───</b> 従属関係 &nbsp;·&nbsp; '
-            '<b style="color:#F59E0B">- - -</b> 要素類似（bigram Jaccard ≥ 15%）'
-            '&nbsp;·&nbsp; ホバーで詳細表示'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.plotly_chart(
-            plot_mindmap(claims),
-            use_container_width=True,
-            config={'displayModeBar': False},
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+        dag_col, mat_col = st.columns([1.4, 1], gap="medium")
+        with dag_col:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title">クレーム依存グラフ（DAG）</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="panel-sub">'
+                '<b style="color:#2563EB">●</b> 独立項 &nbsp;·&nbsp; '
+                '<b style="color:#7C3AED">●</b> 多重従属 &nbsp;·&nbsp; '
+                '<b style="color:#475569">●</b> 従属項'
+                '&nbsp;｜&nbsp;矢印 = 従属方向 &nbsp;·&nbsp; '
+                '<b style="color:#F59E0B">- - -</b> 要素類似（≥ 15%）'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(plot_claim_dag(claims), use_container_width=True,
+                            config={'displayModeBar': False})
+            st.markdown('</div>', unsafe_allow_html=True)
+        with mat_col:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown('<div class="panel-title">要素類似度マトリクス</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="panel-sub">'
+                'bigram Jaccard 類似度（0〜100%）&nbsp;·&nbsp; '
+                '<b style="color:#2563EB">青枠</b> = 従属関係ペア'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            if len(claims) >= 2:
+                st.plotly_chart(plot_claim_matrix(claims), use_container_width=True,
+                                config={'displayModeBar': False})
+            else:
+                st.markdown('<div style="color:#94A3B8;font-size:12px;padding:20px 0">'
+                            '2件以上の請求項があると類似度マトリクスが表示されます。</div>',
+                            unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
     with tab_net:
         left, right = st.columns([1.1, 1], gap="medium")
