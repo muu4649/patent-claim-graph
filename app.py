@@ -189,6 +189,36 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     letter-spacing: -4px;
 }
 
+/* ── Status bar (compact header) ──────────────── */
+.status-bar {
+    display: flex; align-items: center; gap: 0;
+    background: #0F172A; border-radius: 10px;
+    padding: 10px 20px; margin-bottom: 16px;
+    box-shadow: 0 2px 16px rgba(15,23,42,0.18);
+    position: relative; overflow: hidden;
+}
+.status-bar::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg,#2563EB,#06B6D4,#7C3AED);
+}
+.status-title {
+    font-size: 13px; font-weight: 800; color: #60A5FA;
+    letter-spacing: -0.2px; white-space: nowrap; margin-right: 16px;
+}
+.status-sep { width: 1px; height: 18px; background: rgba(255,255,255,0.12); margin: 0 16px; }
+.status-info { font-size: 12px; color: #94A3B8; white-space: nowrap; margin-right: 12px; }
+.sb-tag {
+    font-size: 9px; font-weight: 700; color: #475569;
+    text-transform: uppercase; letter-spacing: 0.7px; margin-right: 6px;
+}
+.status-right { margin-left: auto; }
+.status-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(5,150,105,0.15); border: 1px solid rgba(5,150,105,0.35);
+    color: #34D399; font-size: 10px; font-weight: 700;
+    padding: 3px 10px; border-radius: 20px; letter-spacing: 0.2px;
+}
+
 /* ── Metric cards ──────────────────────────────── */
 .metric-card {
     background: #FFFFFF;
@@ -693,12 +723,63 @@ def compute_tree_pos(claims: dict) -> dict:
 
 
 def bezier_curve(x0, y0, x1, y1, n=28):
-    """S字ベジェ曲線の点列を返す"""
+    """S字ベジェ曲線の点列を返す（上→下方向）"""
     t = np.linspace(0, 1, n)
     cy = (y0 + y1) / 2
     bx = (1-t)**3*x0 + 3*(1-t)**2*t*x0 + 3*(1-t)*t**2*x1 + t**3*x1
     by = (1-t)**3*y0 + 3*(1-t)**2*t*cy + 3*(1-t)*t**2*cy + t**3*y1
     return list(bx) + [None], list(by) + [None]
+
+
+def bezier_curve_h(x0, y0, x1, y1, n=30):
+    """水平Sカーブ（左→右方向）: 親から子へのクレーム依存エッジ用"""
+    t = np.linspace(0, 1, n)
+    cx = (x0 + x1) / 2
+    bx = (1-t)**3*x0 + 3*(1-t)**2*t*cx + 3*(1-t)*t**2*cx + t**3*x1
+    by = (1-t)**3*y0 + 3*(1-t)**2*t*y0 + 3*(1-t)*t**2*y1 + t**3*y1
+    return list(bx) + [None], list(by) + [None]
+
+
+def compute_tree_pos_horizontal(claims: dict) -> dict:
+    """水平ツリーレイアウト: 独立項を左端(depth=0), 子が右に伸びる"""
+    children = defaultdict(list)
+    roots = sorted([n for n, c in claims.items() if c['is_independent']])
+    for n, c in claims.items():
+        if not c['is_independent'] and c['parents']:
+            p = c['parents'][0]
+            if p in claims:
+                children[p].append(n)
+    for k in children:
+        children[k].sort()
+
+    # X = depth * STEP, Y = leaf順に割り当て（上が大）
+    STEP_X = 3.2
+    STEP_Y = 2.2
+    depth_map: dict = {}
+    y_map: dict = {}
+    y_cur = [0.0]
+
+    def assign_depth(n, d=0):
+        depth_map[n] = d
+        for k in children.get(n, []):
+            assign_depth(k, d + 1)
+
+    def assign_y(n):
+        kids = children.get(n, [])
+        if not kids:
+            y_map[n] = y_cur[0]
+            y_cur[0] -= STEP_Y
+            return y_map[n]
+        ys = [assign_y(k) for k in kids]
+        y_map[n] = (ys[0] + ys[-1]) / 2
+        return y_map[n]
+
+    for r in roots:
+        assign_depth(r)
+        assign_y(r)
+        y_cur[0] -= STEP_Y  # ルート間のギャップ
+
+    return {n: (depth_map[n] * STEP_X, y_map[n]) for n in claims if n in depth_map}
 
 
 def _elem_keyword(elem: str) -> str:
@@ -708,110 +789,84 @@ def _elem_keyword(elem: str) -> str:
 
 
 def plot_claim_dag(claims: dict) -> go.Figure:
-    """クレーム依存DAG — 矢印付き有向グラフ + 要素類似破線"""
-    pos = compute_tree_pos(claims)
+    """クレーム依存DAG — 水平レイアウト・ノード色=広狭スコア"""
+    pos = compute_tree_pos_horizontal(claims)
     if not pos: return go.Figure()
 
-    parent_set = {n: set(c['parents']) for n, c in claims.items()}
-    claim_texts = {n: ' '.join(c['elements']) for n, c in claims.items()}
-    claim_nums = sorted(claims.keys())
-
-    # ── 要素類似エッジ（非従属ペア）─────────────
-    sim_pairs = []
-    for i in range(len(claim_nums)):
-        for j in range(i + 1, len(claim_nums)):
-            n1, n2 = claim_nums[i], claim_nums[j]
-            if n2 in parent_set[n1] or n1 in parent_set[n2]: continue
-            if n1 not in pos or n2 not in pos: continue
-            bg1 = _bigrams(claim_texts[n1]); bg2 = _bigrams(claim_texts[n2])
-            union = bg1 | bg2
-            sim = len(bg1 & bg2) / len(union) if union else 0
-            if sim >= 0.15:
-                sim_pairs.append((n1, n2, sim))
-    sim_pairs.sort(key=lambda x: -x[2]); sim_pairs = sim_pairs[:10]
-
+    bs = compute_breadth_scores(claims)
     fig = go.Figure()
-
-    # 類似エッジ（破線・アンバー）
-    for n1, n2, sim in sim_pairs:
-        x0, y0 = pos[n1]; x1, y1 = pos[n2]
-        alpha = min(0.25 + sim * 1.2, 0.75)
-        fig.add_trace(go.Scatter(
-            x=[x0, x1, None], y=[y0, y1, None], mode='lines',
-            line=dict(width=1.8, color=f'rgba(245,158,11,{alpha:.2f})', dash='dot'),
-            hoverinfo='text', hovertext=f'C{n1} ↔ C{n2}　要素類似: {sim:.0%}',
-            showlegend=False, name='',
-        ))
-
-    # 従属エッジ（矢印アノテーション — 有向）
     annotations = []
+
+    # 従属エッジ（水平Sカーブ + 矢印）
     for n, c in claims.items():
         if n not in pos: continue
         x1, y1 = pos[n]
         for p in c['parents']:
             if p not in pos: continue
             x0, y0 = pos[p]
+            bx, by = bezier_curve_h(x0, y0, x1, y1)
+            fig.add_trace(go.Scatter(
+                x=bx, y=by, mode='lines',
+                line=dict(color='#CBD5E1', width=1.8),
+                hoverinfo='skip', showlegend=False, name='',
+            ))
             annotations.append(dict(
-                x=x1, y=y1, ax=x0, ay=y0,
+                x=x1, y=y1, ax=bx[-4], ay=by[-4],
                 xref='x', yref='y', axref='x', ayref='y',
-                arrowhead=2, arrowsize=1.2, arrowwidth=2.0,
-                arrowcolor='#94A3B8',
-                showarrow=True, text='',
+                arrowhead=2, arrowsize=1.0, arrowwidth=2.0,
+                arrowcolor='#94A3B8', showarrow=True, text='',
                 standoff=20,
             ))
 
-    # ノード下ラベル
+    # ノードラベル（スコア + 種別）
     for n in sorted(claims.keys()):
         if n not in pos: continue
-        c = claims[n]; x, y = pos[n]
-        kind = '独立' if c['is_independent'] else ('多重従属' if c['is_multi_dep'] else '従属')
-        kw = _elem_keyword(c['elements'][0]) if c['elements'] else ''
+        c = claims[n]; x, y = pos[n]; bsi = bs[n]
+        dep_label = '独立項' if c['is_independent'] else ('多重従属' if c['is_multi_dep'] else f'→C{c["parents"][0]}')
+        sc_color = bsi['color']
         annotations.append(dict(
-            x=x, y=y - 0.75,
-            text=f"<span style='font-size:9px;color:#64748B'>{kind}" +
-                 (f"<br><span style='font-size:8px'>{kw}</span>" if kw else '') + "</span>",
-            showarrow=False, font=dict(size=9, color='#64748B'),
+            x=x, y=y - 1.35,
+            text=(f"<span style='font-size:9px;color:{sc_color};font-weight:700'>"
+                  f"{bsi['score']}点 {bsi['level']}</span>"
+                  f"<br><span style='font-size:8px;color:#94A3B8'>{dep_label}</span>"),
+            showarrow=False, xref='x', yref='y',
         ))
 
-    # レジェンドダミー
-    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines',
-        line=dict(color='#94A3B8', width=2), name='従属関係 ▶', showlegend=True))
-    if sim_pairs:
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines',
-            line=dict(color='#F59E0B', width=2, dash='dot'), name='要素類似', showlegend=True))
-
-    # ノード
-    nx_, ny_, ntxt, nclr, nsz, nhov = [], [], [], [], [], []
+    # ノード（1点ずつ描画してhoverが独立するように）
     for n in sorted(claims.keys()):
         if n not in pos: continue
-        c = claims[n]; x, y = pos[n]
-        nx_.append(x); ny_.append(y); ntxt.append(str(n))
+        c = claims[n]; x, y = pos[n]; bsi = bs[n]
+        sz = 46 if c['is_independent'] else 38
         dep = '独立項' if c['is_independent'] else f"→ C{', '.join(str(p) for p in c['parents'])}"
-        preview = c['body'][:120].replace('\n', ' ') + ('…' if len(c['body']) > 120 else '')
-        nhov.append(f"<b>請求項 {n}</b>　{dep}<br>要素数: {len(c['elements'])} ／ {c['type']}<br>"
-                    f"<span style='color:#94A3B8;font-size:11px'>{preview}</span><extra></extra>")
-        if c['is_independent']:   nclr.append('#2563EB'); nsz.append(48)
-        elif c['is_multi_dep']:   nclr.append('#7C3AED'); nsz.append(40)
-        else:                     nclr.append('#475569'); nsz.append(40)
+        preview = c['body'][:110].replace('\n', ' ') + ('…' if len(c['body']) > 110 else '')
+        hover = (f"<b>請求項 {n}</b>　{dep}<br>"
+                 f"広狭スコア: {bsi['score']}点（{bsi['level']}）<br>"
+                 f"語数: {bsi['chars']}字 ／ 限定語: {bsi['n_lim']} ／ 要素数: {bsi['n_elem']}<br>"
+                 f"<span style='color:#94A3B8;font-size:11px'>{preview}</span><extra></extra>")
+        fig.add_trace(go.Scatter(
+            x=[x], y=[y], mode='markers+text',
+            marker=dict(size=sz, color=bsi['color'],
+                        line=dict(width=2.5, color='white')),
+            text=[str(n)], textposition='middle center',
+            textfont=dict(color='white', size=13, family='SF Mono,Menlo,monospace'),
+            hovertemplate=hover, showlegend=False, name='',
+        ))
 
-    fig.add_trace(go.Scatter(
-        x=nx_, y=ny_, mode='markers+text',
-        marker=dict(size=nsz, color=nclr, line=dict(width=3, color='white')),
-        text=ntxt, textposition='middle center',
-        textfont=dict(color='white', size=14, family='SF Mono, Menlo, Arial Black'),
-        hovertemplate=nhov, name='', showlegend=False,
-    ))
+    # 凡例（広狭スコア）
+    for color, label in [('#059669', '広（≥62点）'), ('#D97706', '中（≥35点）'), ('#DC2626', '狭（<35点）')]:
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers',
+            marker=dict(size=10, color=color), name=label, showlegend=True))
 
     all_x = [pos[n][0] for n in pos]; all_y = [pos[n][1] for n in pos]
-    px_ = max((max(all_x) - min(all_x)) * 0.10, 0.6)
-    py_ = max((max(all_y) - min(all_y)) * 0.20, 1.0)
+    px_ = max((max(all_x) - min(all_x)) * 0.15, 1.5)
+    py_ = max((max(all_y) - min(all_y)) * 0.30, 2.5)
 
     fig.update_layout(
         annotations=annotations, showlegend=True,
         legend=dict(x=0.01, y=0.01, xanchor='left', yanchor='bottom',
                     bgcolor='rgba(241,245,249,0.92)', bordercolor='#E2E8F0', borderwidth=1,
-                    font=dict(size=11, color='#475569')),
-        margin=dict(l=20, r=20, t=20, b=20),
+                    font=dict(size=10, color='#475569'), orientation='h'),
+        margin=dict(l=20, r=20, t=20, b=50),
         paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
                    range=[min(all_x)-px_, max(all_x)+px_]),
@@ -1088,6 +1143,197 @@ def render_claim_chart(claims: dict, resolved: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
+# IPランドスケープ: ポートフォリオ俯瞰バブルチャート
+# ─────────────────────────────────────────────────────────────
+def plot_portfolio_bubble(patents: dict) -> go.Figure:
+    """
+    X = 独立項の平均広狭スコア（低=広い権利範囲）
+    Y = 最大従属深度（高=サポートが厚い）
+    バブルサイズ = 独立項数
+    """
+    fig = go.Figure()
+    all_depths = []
+
+    for i, (pname, data) in enumerate(patents.items()):
+        claims = data['claims']
+        bs = compute_breadth_scores(claims)
+
+        ind_nums = [n for n, c in claims.items() if c['is_independent']]
+        if not ind_nums:
+            continue
+        avg_score = float(np.mean([bs[n]['score'] for n in ind_nums]))
+
+        ch = defaultdict(list)
+        for n, c in claims.items():
+            for p in c['parents']:
+                if p in claims:
+                    ch[p].append(n)
+        max_d = 0
+        queue = [(r, 0) for r in ind_nums]
+        while queue:
+            node, d = queue.pop(0)
+            max_d = max(max_d, d)
+            for k in ch.get(node, []):
+                queue.append((k, d + 1))
+        all_depths.append(max_d)
+
+        n_ind = len(ind_nums)
+        color = PATENT_COLORS[i % len(PATENT_COLORS)]
+        short = pname[:22] + '…' if len(pname) > 22 else pname
+
+        fig.add_trace(go.Scatter(
+            x=[avg_score], y=[max_d],
+            mode='markers+text',
+            marker=dict(
+                size=28 + n_ind * 14,
+                color=color, opacity=0.78,
+                line=dict(width=2.5, color='white'),
+            ),
+            text=[short], textposition='top center',
+            textfont=dict(size=11, color='#0F172A', family='system-ui,sans-serif'),
+            name=short,
+            hovertemplate=(
+                f'<b>{pname}</b><br>'
+                '平均広狭スコア: %{x:.0f}点<br>'
+                f'最大従属深度: {max_d}<br>'
+                f'独立項数: {n_ind}<extra></extra>'
+            ),
+        ))
+
+    max_d_all = max(all_depths) if all_depths else 3
+
+    # 象限ラベル
+    for tx, ty, text, color in [
+        (15, max_d_all * 0.85, '強固なコア特許<br>（広い×深い）', '#059669'),
+        (80, max_d_all * 0.85, '限定的・詳細特許<br>（狭い×深い）', '#64748B'),
+        (15, 0.05, '広いが浅い<br>→ 従属補強を検討', '#D97706'),
+        (80, 0.05, '限定的・薄い<br>（狭い×浅い）', '#DC2626'),
+    ]:
+        fig.add_annotation(
+            x=tx, y=ty, text=f"<span style='font-size:10px'>{text}</span>",
+            showarrow=False, font=dict(size=10, color=color),
+            xref='x', yref='y', opacity=0.6,
+        )
+
+    # 象限グリッド
+    fig.add_shape(type='line', x0=50, x1=50, y0=-0.3, y1=max_d_all + 0.5,
+                  line=dict(color='#E2E8F0', width=1, dash='dash'))
+    fig.add_shape(type='line', x0=0, x1=100, y0=max_d_all / 2, y1=max_d_all / 2,
+                  line=dict(color='#E2E8F0', width=1, dash='dash'))
+
+    fig.update_layout(
+        xaxis=dict(title='広狭スコア（低 ← 広い権利範囲 / 狭い → 高）',
+                   range=[0, 100], showgrid=True, gridcolor='#F1F5F9',
+                   zeroline=False, tickfont=dict(size=10)),
+        yaxis=dict(title='最大従属深度', range=[-0.5, max_d_all + 1.2],
+                   showgrid=True, gridcolor='#F1F5F9',
+                   zeroline=False, tickfont=dict(size=10),
+                   dtick=1),
+        height=400,
+        margin=dict(l=50, r=20, t=20, b=60),
+        paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
+        showlegend=True,
+        legend=dict(x=1.01, y=1, xanchor='left', yanchor='top',
+                    font=dict(size=10, color='#475569')),
+        hoverlabel=dict(bgcolor='#0F172A', font_color='#F1F5F9', font_size=12),
+    )
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────
+# IPランドスケープ: 技術カバレッジマップ（ホワイトスペース付き）
+# ─────────────────────────────────────────────────────────────
+def build_tech_clusters(patents: dict) -> list:
+    """
+    全特許の構成要件を bigram Jaccard ≥ 0.35 でクラスタリング
+    Returns: [{'rep', 'members', 'coverage': {pname: [elems]}}]
+    """
+    clusters: list = []
+    for pname, data in patents.items():
+        for num, c in data['claims'].items():
+            for elem in c['elements']:
+                bg = _bigrams(elem)
+                placed = False
+                for cl in clusters:
+                    rep_bg = _bigrams(cl['rep'])
+                    union = bg | rep_bg
+                    if union and len(bg & rep_bg) / len(union) >= 0.35:
+                        cl['members'].append((elem, pname))
+                        cl['coverage'].setdefault(pname, []).append(elem)
+                        placed = True
+                        break
+                if not placed:
+                    clusters.append({
+                        'rep': elem,
+                        'members': [(elem, pname)],
+                        'coverage': {pname: [elem]},
+                    })
+    clusters.sort(key=lambda cl: (-len(cl['coverage']), cl['rep']))
+    return clusters
+
+
+def render_landscape(patents: dict) -> str:
+    if len(patents) < 2:
+        return "<p style='color:#94A3B8;padding:20px'>2件以上の特許を読み込むと表示されます。</p>"
+
+    clusters = build_tech_clusters(patents)
+    pnames = list(patents.keys())
+    shorts = {p: (p[:16] + '…' if len(p) > 16 else p) for p in pnames}
+
+    rows = ['<div class="ct-wrap"><table class="ct">']
+    rows.append('<thead><tr><th class="elem-col">技術クラスター（代表要素）</th>')
+    for i, p in enumerate(pnames):
+        c = PATENT_COLORS[i % len(PATENT_COLORS)]
+        rows.append(f'<th style="color:{c};border-top:3px solid {c}">{shorts[p]}</th>')
+    rows.append('<th>カバー率</th><th>判定</th></tr></thead><tbody>')
+
+    ws_count = 0
+    for cl in clusters:
+        n_cov = len(cl['coverage'])
+        rate = n_cov / len(pnames)
+        is_ws = n_cov == 0
+
+        if is_ws:
+            ws_count += 1
+            row_style = ' style="background:rgba(220,38,38,0.04)"'
+        else:
+            row_style = ''
+
+        rows.append(f'<tr{row_style}>')
+        rep = cl['rep'][:55] + '…' if len(cl['rep']) > 55 else cl['rep']
+        rows.append(f'<td class="elem-cell">{rep}</td>')
+
+        for p in pnames:
+            if p in cl['coverage']:
+                c = PATENT_COLORS[pnames.index(p) % len(PATENT_COLORS)]
+                rows.append(f'<td><span style="color:{c};font-weight:700;font-size:16px">✓</span></td>')
+            else:
+                rows.append('<td><span class="c-none">—</span></td>')
+
+        pct = f'{rate:.0%}'
+        if rate == 0:
+            label, cls = '★ WS', 'cov-low'
+        elif rate >= 1.0:
+            label, cls = '全社', 'cov-high'
+        elif rate >= 0.5:
+            label, cls = '複数', 'cov-mid'
+        else:
+            label, cls = '単独', 'cov-low'
+
+        rows.append(f'<td class="{cls}">{pct}</td><td class="{cls}">{label}</td></tr>')
+
+    rows.append('</tbody></table>')
+    rows.append('<div class="legend">')
+    if ws_count:
+        rows.append(f'<span><b style="color:#DC2626">★ WS</b> ホワイトスペース {ws_count}件（全社未カバー → 出願機会）</span>')
+    for i, p in enumerate(pnames):
+        c = PATENT_COLORS[i % len(PATENT_COLORS)]
+        rows.append(f'<span><b style="color:{c}">■</b> {shorts[p]}</span>')
+    rows.append('</div></div>')
+    return ''.join(rows)
+
+
+# ─────────────────────────────────────────────────────────────
 # サンプルデータ
 # ─────────────────────────────────────────────────────────────
 SAMPLE = """\
@@ -1252,6 +1498,32 @@ sim(e1, e2) =
 両者を組み合わせるとカバレッジが向上します。
 """,
     ),
+    'landscape': (
+        "**IPランドスケープ分析の算出方法**",
+        """
+### ポートフォリオ俯瞰バブルチャート
+
+| 軸 | 算出方法 |
+|---|---|
+| X軸（広狭スコア） | 各特許の独立項の広狭スコアの平均値 |
+| Y軸（従属深度） | クレームDAGの最大深さ（独立項=0） |
+| バブルサイズ | 独立項数 × 係数 |
+
+**象限の読み方**
+- 左上 = 広い権利範囲 × 深いサポート → **強固なコア特許**
+- 右上 = 限定的 × 深い → 詳細特許（実施形態の保護）
+- 左下 = 広い × 浅い → 早期出願の広範クレーム（従属補強を検討）
+- 右下 = 狭い × 浅い → 改良特許・周辺特許
+
+### 技術カバレッジマップ
+
+**クラスタリング:** 構成要件を bigram Jaccard ≥ **0.35** でグループ化（技術領域単位に集約）
+
+**カバー率:** 各クラスターを何社／何件がカバーしているか
+
+**★ WS（ホワイトスペース）:** どの特許にも含まれない技術クラスター → **出願機会の候補**
+""",
+    ),
     'network': (
         "**構成要件ネットワーク中心性指標の算出方法**",
         """
@@ -1414,13 +1686,18 @@ def main():
         """, unsafe_allow_html=True)
         return
 
-    # ── Hero header ─────────────────────────────────────────
+    # ── Compact status bar ───────────────────────────────────
     st.markdown(
-        f'<div class="hero-strip">'
-        f'<div class="hero-title">Patent Claim <span>Analyzer</span></div>'
-        f'<div class="hero-sub">構文解析 + グラフ理論 ─ 非生成AI · 決定論的 · 再現可能</div>'
-        f'<div><span class="hero-badge">⚡ {n_patents} 件読み込み済み</span></div>'
-        f'<div class="hero-ghost">C</div>'
+        f'<div class="status-bar">'
+        f'<div class="status-title">Patent Claim Analyzer</div>'
+        f'<div class="status-sep"></div>'
+        f'<div class="status-info"><span class="sb-tag">分析対象</span>{active}</div>'
+        f'<div class="status-sep"></div>'
+        f'<div class="status-info"><span class="sb-tag">請求項</span>{m["n_claims"]} 件</div>'
+        f'<div class="status-info"><span class="sb-tag">独立</span>{m["n_ind"]}</div>'
+        f'<div class="status-info"><span class="sb-tag">最大深度</span>{m["max_depth"]}</div>'
+        f'<div class="status-info"><span class="sb-tag">要素</span>{m["n_elements"]}</div>'
+        f'<div class="status-right"><span class="status-badge">非生成AI · 決定論的</span></div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1468,11 +1745,11 @@ def main():
     # ── Tabs ────────────────────────────────────────────────
     tabs = ["　クレームチャート　", "　クレーム構造グラフ　", "　要素ネットワーク　"]
     if n_patents >= 2:
-        tabs.append("　対比表　")
+        tabs.append("　IPランドスケープ　")
 
     tab_objects = st.tabs(tabs)
     tab_chart, tab_map, tab_net = tab_objects[0], tab_objects[1], tab_objects[2]
-    tab_comp = tab_objects[3] if n_patents >= 2 else None
+    tab_land = tab_objects[3] if n_patents >= 2 else None
 
     with tab_chart:
         _tc0, _ic0 = st.columns([9, 1])
@@ -1607,44 +1884,73 @@ def main():
             st.dataframe(df_c, use_container_width=True, hide_index=True, height=300)
             st.markdown('</div>', unsafe_allow_html=True)
 
-    if tab_comp is not None:
-        with tab_comp:
-            _tc5, _ic5 = st.columns([7, 3])
-            with _ic5:
-                _info_popover('jaccard' if not SBERT_OK else 'sbert')
-            use_sbert = False
-            if SBERT_OK:
-                use_sbert = st.toggle(
-                    'SBERT 意味類似度を使用（multilingual-e5-small）',
-                    value=False,
-                    help='bigram Jaccard に加えてエンコーダ埋め込みのコサイン類似度で補完します。初回はモデルをダウンロードします。',
-                )
-            else:
-                st.markdown(
-                    '<div style="font-size:11px;color:#94A3B8;margin-bottom:8px">'
-                    'sentence-transformers 未インストール — bigram Jaccard のみ使用します。'
-                    '</div>',
-                    unsafe_allow_html=True,
-                )
-
-            sbert_model = None
-            if use_sbert:
-                with st.spinner('モデルを読み込んでいます…'):
-                    sbert_model = load_sbert()
-                if sbert_model is None:
-                    st.warning('モデルの読み込みに失敗しました。bigram Jaccard で代替します。')
-
+    if tab_land is not None:
+        with tab_land:
+            # ── ポートフォリオ俯瞰 ─────────────────────────
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            _tl1, _il1 = st.columns([8, 2])
+            with _tl1:
+                st.markdown('<div class="panel-title">ポートフォリオ俯瞰バブルチャート</div>',
+                            unsafe_allow_html=True)
+            with _il1:
+                _info_popover('landscape')
             st.markdown(
-                '<div style="font-size:12px;color:#64748B;margin-bottom:12px">'
-                '全請求項の構成要件を横断比較します。'
-                + ('SBERT コサイン類似度 ≥ 0.75 で同一要素とみなします。'
-                   if use_sbert and sbert_model is not None
-                   else 'bigram Jaccard ≥ 0.25 で同一要素とみなします。')
-                + '</div>',
+                '<div class="panel-sub">'
+                'X = 独立項の平均広狭スコア &nbsp;·&nbsp; '
+                'Y = 最大従属深度 &nbsp;·&nbsp; '
+                'バブルサイズ = 独立項数'
+                '</div>',
                 unsafe_allow_html=True,
             )
-            st.markdown(render_comparison(st.session_state.patents, sbert_model=sbert_model),
-                        unsafe_allow_html=True)
+            st.plotly_chart(plot_portfolio_bubble(st.session_state.patents),
+                            use_container_width=True, config={'displayModeBar': False})
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # ── 技術カバレッジマップ ──────────────────────
+            st.markdown('<div class="panel" style="margin-top:12px">', unsafe_allow_html=True)
+            _tl2, _il2 = st.columns([8, 2])
+            with _tl2:
+                st.markdown('<div class="panel-title">技術カバレッジマップ</div>',
+                            unsafe_allow_html=True)
+            with _il2:
+                _info_popover('landscape')
+            st.markdown(
+                '<div class="panel-sub">'
+                'bigram Jaccard ≥ 0.35 で構成要件を技術クラスタに集約 &nbsp;·&nbsp; '
+                '<b style="color:#DC2626">★ WS</b> = ホワイトスペース（全社未カバー）'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(render_landscape(st.session_state.patents), unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # ── 構成要件詳細対比（折りたたみ）─────────────
+            with st.expander("構成要件詳細対比（要素レベル）"):
+                use_sbert = False
+                if SBERT_OK:
+                    use_sbert = st.toggle(
+                        'SBERT 意味類似度を使用（multilingual-e5-small）',
+                        value=False,
+                        help='初回はモデルをダウンロードします。',
+                    )
+                    if use_sbert:
+                        with st.spinner('モデルを読み込んでいます…'):
+                            sbert_model = load_sbert()
+                        if sbert_model is None:
+                            st.warning('モデルの読み込みに失敗しました。bigram Jaccard で代替します。')
+                            sbert_model = None
+                    else:
+                        sbert_model = None
+                else:
+                    sbert_model = None
+                    st.markdown(
+                        '<div style="font-size:11px;color:#94A3B8;margin-bottom:6px">'
+                        'sentence-transformers 未インストール — bigram Jaccard のみ使用。'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                st.markdown(render_comparison(st.session_state.patents, sbert_model=sbert_model),
+                            unsafe_allow_html=True)
 
 
 if __name__ == '__main__':
