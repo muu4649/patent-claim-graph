@@ -1686,6 +1686,17 @@ def main():
         """, unsafe_allow_html=True)
         return
 
+    # ── Active patent data ───────────────────────────────────
+    active = st.session_state.active
+    if active not in st.session_state.patents:
+        active = list(st.session_state.patents.keys())[0]
+        st.session_state.active = active
+
+    data = st.session_state.patents[active]
+    claims, resolved = data['claims'], data['resolved']
+    elem_G = build_elem_graph(claims, resolved)
+    m = compute_metrics(claims, elem_G)
+
     # ── Compact status bar ───────────────────────────────────
     st.markdown(
         f'<div class="status-bar">'
@@ -1701,17 +1712,6 @@ def main():
         f'</div>',
         unsafe_allow_html=True,
     )
-
-    # ── Active patent data ───────────────────────────────────
-    active = st.session_state.active
-    if active not in st.session_state.patents:
-        active = list(st.session_state.patents.keys())[0]
-        st.session_state.active = active
-
-    data = st.session_state.patents[active]
-    claims, resolved = data['claims'], data['resolved']
-    elem_G = build_elem_graph(claims, resolved)
-    m = compute_metrics(claims, elem_G)
 
     # ── Metrics ─────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
